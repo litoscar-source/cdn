@@ -14,15 +14,26 @@ export enum AttendanceStatus {
 export interface User {
   id: string;
   name: string;
-  username: string; // Changed from email
+  username: string;
   role: UserRole;
   password?: string;
-  allowedSquads?: string[]; // IDs of squads this user can manage
+  allowedSquads?: string[];
 }
 
 export interface Squad {
   id: string;
-  name: string; // e.g., "Sub-11", "Seniores"
+  name: string;
+}
+
+// New Interface for detailed player stats
+export interface PlayerStats {
+  technique: number; // 0-100
+  speed: number;
+  tactical: number;
+  physical: number;
+  behavior: string;
+  strongFoot: 'Direito' | 'Esquerdo' | 'Ambos';
+  positions: string;
 }
 
 export interface Player {
@@ -37,18 +48,19 @@ export interface Player {
   tracksuitSize: string;
   notes: string;
   photoUrl?: string;
-  // New fields
   emergencyName?: string;
   emergencyContact?: string;
+  // New: Sports Sheet
+  sportsDetails?: PlayerStats;
 }
 
 export interface TrainingSession {
   id: string;
   squadId: string;
-  date: string; // ISO Date string
+  date: string;
   time: string;
   description: string;
-  drills?: string; // AI Generated content
+  // Removed drills (AI)
 }
 
 export interface AttendanceRecord {
@@ -58,6 +70,28 @@ export interface AttendanceRecord {
   status: AttendanceStatus;
 }
 
+// Game Management Types
+export interface MatchEvent {
+  type: 'GOAL' | 'SUBSTITUTION' | 'CARD_YELLOW' | 'CARD_RED';
+  minute: number;
+  playerId: string;
+  playerOutId?: string; // For substitutions
+  note?: string;
+}
+
+export interface MatchData {
+  starters: string[]; // IDs of players starting
+  substitutes: string[]; // IDs of players on bench (legacy, prefer dynamic calculation)
+  formation: string; // e.g., "4-3-3", "4-4-2"
+  events: MatchEvent[];
+  playerMinutes: Record<string, number>; // Map playerId -> minutes played
+  currentPeriod: 'PRE' | '1H' | 'HT' | '2H' | 'FT';
+  timer: number; // Current second of the match
+  isTimerRunning: boolean; // Controls if the timer is ticking
+  // NEW: Coordinates for tactics board
+  playerPositions: Record<string, {x: number, y: number}>; // x, y in percentages (0-100)
+}
+
 export interface Match {
   id: string;
   squadId: string;
@@ -65,7 +99,12 @@ export interface Match {
   time: string;
   opponent: string;
   location: 'Casa' | 'Fora';
-  convokedIds: string[]; // List of player IDs
+  convokedIds: string[];
+  notes?: string;
+  // New Fields
+  playerKit?: string;
+  goalkeeperKit?: string;
+  gameData?: MatchData; // Stores the live game state
 }
 
-export type ViewState = 'DASHBOARD' | 'PLAYERS' | 'TRAINING' | 'MATCHES' | 'ADMIN' | 'AI_ASSISTANT';
+export type ViewState = 'DASHBOARD' | 'PLAYERS' | 'TRAINING' | 'MATCHES' | 'ADMIN';

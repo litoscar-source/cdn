@@ -1,21 +1,21 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { 
-  User, Squad, Player, TrainingSession, AttendanceRecord, ViewState, UserRole, AttendanceStatus, Match 
+  User, Squad, Player, TrainingSession, AttendanceRecord, ViewState, UserRole, AttendanceStatus, Match, MatchData 
 } from './types';
 import { storageService } from './services/storageService';
-import { generateTrainingPlan } from './services/geminiService';
+import { generateConvocationPDF } from './services/pdfService';
+import { CLUB_NAME, CLUB_LOGO_URL } from './constants';
 import Layout from './components/Layout';
 import PlayerForm from './components/PlayerForm';
 import { 
-  Plus, Search, Filter, Trash2, Edit2, Check, X as XIcon, AlertCircle, Clock, Save, BrainCircuit, UserPlus, Shield, Users, UserCircle, CalendarDays, KeyRound, Flag, Copy, MapPin, FileText
+  Plus, Search, Filter, Trash2, Edit2, Check, X as XIcon, AlertCircle, Clock, Save, UserPlus, Users, UserCircle, CalendarDays, KeyRound, Flag, Copy, FileDown, Loader2, Play, Pause, Square, Shirt, Shield, ArrowRightLeft, FileText, Move, Maximize2, Minimize2, UserMinus, UserCheck
 } from 'lucide-react';
 
 const App: React.FC = () => {
   // Global State
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [currentView, setCurrentView] = useState<ViewState>('DASHBOARD');
-  const [isLoading, setIsLoading] = useState(false);
-
+  
   // Data State
   const [users, setUsers] = useState<User[]>([]);
   const [squads, setSquads] = useState<Squad[]>([]);
@@ -26,29 +26,90 @@ const App: React.FC = () => {
 
   // UI State
   const [isLoginView, setIsLoginView] = useState(true);
-  const [loginUsername, setLoginUsername] = useState('');
-  const [loginPassword, setLoginPassword] = useState('');
+  const [selectedLoginUserId, setSelectedLoginUserId] = useState('');
 
   const [editingPlayer, setEditingPlayer] = useState<Player | null | undefined>(undefined); 
   const [selectedSquadFilter, setSelectedSquadFilter] = useState<string>('all');
   
   // Training/Attendance UI State
-  const [isCreatingSession, setIsCreatingSession] = useState(false);
-  const [newSessionData, setNewSessionData] = useState<Partial<TrainingSession>>({});
+  const [isSessionModalOpen, setIsSessionModalOpen] = useState(false);
+  const [editingSession, setEditingSession] = useState<Partial<TrainingSession>>({});
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
 
   // Matches UI State
-  const [isCreatingMatch, setIsCreatingMatch] = useState(false);
-  const [newMatchData, setNewMatchData] = useState<Partial<Match>>({});
+  const [isMatchModalOpen, setIsMatchModalOpen] = useState(false);
+  const [editingMatch, setEditingMatch] = useState<Partial<Match>>({});
   const [selectedMatchId, setSelectedMatchId] = useState<string | null>(null);
+  const [isGeneratingPdf, setIsGeneratingPdf] = useState(false);
+  
+  // Game Day UI State
+  const [activeGameTab, setActiveGameTab] = useState<'LINEUP' | 'TACTICS' | 'LIVE'>('LINEUP');
+  
+  // Tactics Selection State
+  const [selectedTacticsPlayerId, setSelectedTacticsPlayerId] = useState<string | null>(null);
+  const [isTacticsFullscreen, setIsTacticsFullscreen] = useState(false);
+  const [draggingPlayerId, setDraggingPlayerId] = useState<string | null>(null);
+  const fieldRef = useRef<HTMLDivElement>(null);
 
-  // AI State
-  const [aiPromptData, setAiPromptData] = useState({ focus: '', duration: 90, squadId: '' });
-  const [aiResponse, setAiResponse] = useState<string>('');
+  // --- TIMER LOGIC ---
+  const timerRef = useRef<any>(null);
+
+  useEffect(() => {
+    return () => {
+      if (timerRef.current) clearInterval(timerRef.current);
+    };
+  }, []);
+
+  // Timer Tick
+  useEffect(() => {
+    if (selectedMatchId && matches.length > 0) {
+      const match = matches.find(m => m.id === selectedMatchId);
+      
+      // Only tick if period is active AND timer is running
+      if (match?.gameData?.isTimerRunning && (match.gameData.currentPeriod === '1H' || match.gameData.currentPeriod === '2H')) {
+          if (!timerRef.current) {
+            timerRef.current = setInterval(() => {
+                setMatches(prevMatches => {
+                    return prevMatches.map(m => {
+                        if (m.id === selectedMatchId && m.gameData?.isTimerRunning) {
+                             const newTimer = m.gameData.timer + 1;
+                             
+                             // Update Minutes Played every 60s
+                             const newPlayerMinutes = { ...m.gameData.playerMinutes };
+                             if (newTimer % 60 === 0) {
+                                 m.gameData.starters.forEach(pid => {
+                                     newPlayerMinutes[pid] = (newPlayerMinutes[pid] || 0) + 1;
+                                 });
+                             }
+                             return {
+                                 ...m,
+                                 gameData: {
+                                     ...m.gameData,
+                                     timer: newTimer,
+                                     playerMinutes: newPlayerMinutes
+                                 }
+                             };
+                        }
+                        return m;
+                    });
+                });
+            }, 1000); 
+          }
+      } else {
+          if (timerRef.current) {
+              clearInterval(timerRef.current);
+              timerRef.current = null;
+          }
+      }
+    }
+  }, [selectedMatchId, matches]);
 
   // Initial Load
   useEffect(() => {
     const user = storageService.getCurrentUser();
+    const storedUsers = storageService.getUsers();
+    setUsers(storedUsers);
+
     if (user) {
       setCurrentUser(user);
       setIsLoginView(false);
@@ -67,13 +128,13 @@ const App: React.FC = () => {
 
   const handleLogin = (e: React.FormEvent) => {
     e.preventDefault();
-    const user = storageService.login(loginUsername, loginPassword);
+    if(!selectedLoginUserId) return;
+    const user = users.find(u => u.id === selectedLoginUserId);
     if (user) {
+      storageService.login(user.username, user.password || ''); 
       setCurrentUser(user);
       setIsLoginView(false);
       loadData();
-    } else {
-      alert("Credenciais inválidas.");
     }
   };
 
@@ -81,8 +142,7 @@ const App: React.FC = () => {
     storageService.logout();
     setCurrentUser(null);
     setIsLoginView(true);
-    setLoginUsername('');
-    setLoginPassword('');
+    setSelectedLoginUserId('');
   };
 
   // --- Helper: Visible Squads for Current User ---
@@ -155,20 +215,33 @@ const App: React.FC = () => {
   };
 
   // --- Logic for Training ---
-  const createSession = () => {
-    if (!newSessionData.date || !newSessionData.squadId) return;
-    const session: TrainingSession = {
-      id: crypto.randomUUID(),
-      date: newSessionData.date!,
-      squadId: newSessionData.squadId!,
-      time: newSessionData.time || '19:00',
-      description: newSessionData.description || 'Treino'
-    };
-    const updatedSessions = [...sessions, session];
+  const openSessionModal = (session?: TrainingSession) => {
+      setEditingSession(session || { date: new Date().toISOString().split('T')[0], time: '19:00', squadId: visibleSquads[0]?.id });
+      setIsSessionModalOpen(true);
+  }
+
+  const saveSession = () => {
+    if (!editingSession.date || !editingSession.squadId) return;
+    
+    let updatedSessions = [...sessions];
+    if (editingSession.id) {
+        // Edit
+        updatedSessions = updatedSessions.map(s => s.id === editingSession.id ? { ...s, ...editingSession } as TrainingSession : s);
+    } else {
+        // Create
+        const session: TrainingSession = {
+            id: crypto.randomUUID(),
+            date: editingSession.date!,
+            squadId: editingSession.squadId!,
+            time: editingSession.time || '19:00',
+            description: editingSession.description || 'Treino'
+        };
+        updatedSessions.push(session);
+    }
     setSessions(updatedSessions);
     storageService.saveSessions(updatedSessions);
-    setIsCreatingSession(false);
-    setNewSessionData({});
+    setIsSessionModalOpen(false);
+    setEditingSession({});
   };
 
   const toggleAttendance = (playerId: string, sessionId: string, status: AttendanceStatus) => {
@@ -193,23 +266,64 @@ const App: React.FC = () => {
     return record?.status;
   };
 
-  // --- Logic for Matches (Convocatórias) ---
-  const createMatch = () => {
-    if (!newMatchData.date || !newMatchData.squadId || !newMatchData.opponent) return;
-    const match: Match = {
-      id: crypto.randomUUID(),
-      squadId: newMatchData.squadId!,
-      date: newMatchData.date!,
-      time: newMatchData.time || '15:00',
-      opponent: newMatchData.opponent!,
-      location: newMatchData.location as 'Casa' | 'Fora' || 'Casa',
-      convokedIds: []
-    };
-    const updated = [...matches, match];
-    setMatches(updated);
-    storageService.saveMatches(updated);
-    setIsCreatingMatch(false);
-    setNewMatchData({});
+  // --- Logic for Matches (Convocatórias & Game Day) ---
+  const openMatchModal = (match?: Match) => {
+      setEditingMatch(match || { 
+          date: new Date().toISOString().split('T')[0], 
+          time: '15:00', 
+          squadId: visibleSquads[0]?.id,
+          location: 'Casa'
+      });
+      setIsMatchModalOpen(true);
+  }
+
+  const saveMatch = () => {
+    if (!editingMatch.date || !editingMatch.squadId || !editingMatch.opponent) return;
+
+    let updatedMatches = [...matches];
+    if (editingMatch.id) {
+        updatedMatches = updatedMatches.map(m => m.id === editingMatch.id ? { ...m, ...editingMatch } as Match : m);
+    } else {
+        const match: Match = {
+            id: crypto.randomUUID(),
+            squadId: editingMatch.squadId!,
+            date: editingMatch.date!,
+            time: editingMatch.time || '15:00',
+            opponent: editingMatch.opponent!,
+            location: editingMatch.location as 'Casa' | 'Fora' || 'Casa',
+            convokedIds: [],
+            notes: editingMatch.notes || '',
+            playerKit: editingMatch.playerKit,
+            goalkeeperKit: editingMatch.goalkeeperKit
+        };
+        updatedMatches.push(match);
+    }
+    setMatches(updatedMatches);
+    storageService.saveMatches(updatedMatches);
+    setIsMatchModalOpen(false);
+    setEditingMatch({});
+  };
+
+  const updateMatchGameData = (matchId: string, data: Partial<MatchData>) => {
+      const updatedMatches = matches.map(m => {
+          if (m.id === matchId) {
+              const prevData = m.gameData || {
+                  starters: [],
+                  substitutes: [],
+                  formation: '4-3-3',
+                  events: [],
+                  playerMinutes: {},
+                  playerPositions: {},
+                  currentPeriod: 'PRE',
+                  timer: 0,
+                  isTimerRunning: false
+              };
+              return { ...m, gameData: { ...prevData, ...data } };
+          }
+          return m;
+      });
+      setMatches(updatedMatches);
+      storageService.saveMatches(updatedMatches);
   };
 
   const toggleConvocation = (matchId: string, playerId: string) => {
@@ -218,14 +332,160 @@ const App: React.FC = () => {
 
     let newConvoked = [...match.convokedIds];
     if (newConvoked.includes(playerId)) {
+      // Remove
       newConvoked = newConvoked.filter(id => id !== playerId);
+      if (match.gameData) {
+          updateMatchGameData(matchId, {
+              starters: match.gameData.starters.filter(id => id !== playerId),
+              substitutes: match.gameData.substitutes.filter(id => id !== playerId)
+          });
+      }
     } else {
+      // Add
       newConvoked.push(playerId);
     }
 
     const updatedMatches = matches.map(m => m.id === matchId ? { ...m, convokedIds: newConvoked } : m);
     setMatches(updatedMatches);
     storageService.saveMatches(updatedMatches);
+  };
+
+  // Helper to toggle starter status directly from list
+  const toggleStarterStatus = (matchId: string, playerId: string, e: React.MouseEvent) => {
+      e.stopPropagation();
+      const match = matches.find(m => m.id === matchId);
+      if(!match) return;
+
+      const currentStarters = match.gameData?.starters || [];
+      let newStarters = [...currentStarters];
+
+      if (newStarters.includes(playerId)) {
+          // Move to Bench
+          newStarters = newStarters.filter(id => id !== playerId);
+      } else {
+          // Move to Starters
+          newStarters.push(playerId);
+      }
+
+      updateMatchGameData(matchId, { starters: newStarters });
+  };
+
+  // --- TACTICS BOARD LOGIC (DRAG & DROP) ---
+  const handlePointerDown = (e: React.PointerEvent, playerId: string) => {
+      e.stopPropagation();
+      e.currentTarget.setPointerCapture(e.pointerId);
+      setDraggingPlayerId(playerId);
+      // Ensure player is in starters if not already
+      const match = matches.find(m => m.id === selectedMatchId);
+      if (match && !match.gameData?.starters.includes(playerId)) {
+          updateMatchGameData(match.id, {
+              starters: [...(match.gameData?.starters || []), playerId]
+          });
+      }
+  };
+
+  const handlePointerMove = (e: React.PointerEvent) => {
+      if (!draggingPlayerId || !fieldRef.current || !selectedMatchId) return;
+      
+      const rect = fieldRef.current.getBoundingClientRect();
+      const x = Math.max(0, Math.min(100, ((e.clientX - rect.left) / rect.width) * 100));
+      const y = Math.max(0, Math.min(100, ((e.clientY - rect.top) / rect.height) * 100));
+
+      const match = matches.find(m => m.id === selectedMatchId);
+      if (match) {
+           const currentPositions = match.gameData?.playerPositions || {};
+           updateMatchGameData(selectedMatchId, {
+               playerPositions: { ...currentPositions, [draggingPlayerId]: { x, y } }
+           });
+      }
+  };
+
+  const handlePointerUp = (e: React.PointerEvent) => {
+      setDraggingPlayerId(null);
+      e.currentTarget.releasePointerCapture(e.pointerId);
+  };
+
+  // Also support click-to-place for non-drag interaction
+  const handleFieldClick = (e: React.MouseEvent) => {
+      if (!selectedTacticsPlayerId || !selectedMatchId || !fieldRef.current) return;
+      
+      const rect = fieldRef.current.getBoundingClientRect();
+      const x = ((e.clientX - rect.left) / rect.width) * 100;
+      const y = ((e.clientY - rect.top) / rect.height) * 100;
+
+      const match = matches.find(m => m.id === selectedMatchId);
+      if(match) {
+          const currentStarters = match.gameData?.starters || [];
+          let newStarters = [...currentStarters];
+          if(!newStarters.includes(selectedTacticsPlayerId)) newStarters.push(selectedTacticsPlayerId);
+
+          updateMatchGameData(selectedMatchId, {
+              starters: newStarters,
+              playerPositions: { ...(match.gameData?.playerPositions || {}), [selectedTacticsPlayerId]: { x, y } }
+          });
+          setSelectedTacticsPlayerId(null);
+      }
+  };
+
+  const removeStarter = (playerId: string) => {
+      if (!selectedMatchId) return;
+      const match = matches.find(m => m.id === selectedMatchId);
+      if(!match) return;
+      
+      const newStarters = (match.gameData?.starters || []).filter(id => id !== playerId);
+      updateMatchGameData(selectedMatchId, { starters: newStarters });
+  };
+
+  // --- LIVE GAME LOGIC ---
+  const handleSubstitution = (matchId: string, playerOutId: string, playerInId: string) => {
+      const match = matches.find(m => m.id === matchId);
+      if(!match) return;
+
+      const newStarters = (match.gameData?.starters || []).filter(id => id !== playerOutId);
+      newStarters.push(playerInId);
+      
+      updateMatchGameData(matchId, { starters: newStarters });
+  };
+
+  const toggleTimer = (matchId: string) => {
+      const match = matches.find(m => m.id === matchId);
+      if(!match) return;
+      const isRunning = match.gameData?.isTimerRunning || false;
+      updateMatchGameData(matchId, { isTimerRunning: !isRunning });
+  };
+
+  const setGamePeriod = (matchId: string, period: MatchData['currentPeriod']) => {
+      const match = matches.find(m => m.id === matchId);
+      // Explicitly Reset timer to 0 when changing period as requested
+      updateMatchGameData(matchId, { currentPeriod: period, isTimerRunning: false, timer: 0 });
+  };
+  
+  const formatTime = (seconds: number) => {
+      const m = Math.floor(seconds / 60);
+      const s = seconds % 60;
+      return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+  };
+
+  // --- PDF ---
+  const downloadConvocationPDF = async (matchId: string) => {
+    const match = matches.find(m => m.id === matchId);
+    if (!match) return;
+    const squad = squads.find(s => s.id === match.squadId);
+    const convokedPlayers = players.filter(p => match.convokedIds.includes(p.id));
+
+    if (squad && convokedPlayers.length > 0) {
+      setIsGeneratingPdf(true);
+      try {
+        await generateConvocationPDF(match, squad, convokedPlayers);
+      } catch (e) {
+        console.error(e);
+        alert("Erro ao gerar PDF.");
+      } finally {
+        setIsGeneratingPdf(false);
+      }
+    } else {
+      alert("É necessário ter atletas convocados para gerar o PDF.");
+    }
   };
 
   const copyConvocation = (matchId: string) => {
@@ -236,8 +496,10 @@ const App: React.FC = () => {
     
     let text = `CONVOCATÓRIA ${squad?.name.toUpperCase()}\n`;
     text += `Vs: ${match.opponent} (${match.location})\n`;
-    text += `Data: ${match.date} ${match.time}\n\n`;
-    text += `ATLETAS:\n`;
+    text += `Data: ${match.date} ${match.time}\n`;
+    if(match.playerKit) text += `Equip: ${match.playerKit}\n`;
+    if (match.notes) text += `Obs: ${match.notes}\n`;
+    text += `\nATLETAS:\n`;
     convokedPlayers.forEach(p => {
       text += `- ${p.name} (${p.jerseyNumber})\n`;
     });
@@ -246,41 +508,9 @@ const App: React.FC = () => {
     alert("Convocatória copiada!");
   };
 
-  // --- Weekly Stats Logic ---
-  const weeklyStats = useMemo(() => {
-    // Determine start/end of current week
-    const now = new Date();
-    const startOfWeek = new Date(now.setDate(now.getDate() - now.getDay()));
-    startOfWeek.setHours(0,0,0,0);
-    const endOfWeek = new Date(startOfWeek);
-    endOfWeek.setDate(endOfWeek.getDate() + 6);
-
-    const weekSessions = sessions.filter(s => {
-      const d = new Date(s.date);
-      return d >= startOfWeek && d <= endOfWeek && visibleSquads.map(sq=>sq.id).includes(s.squadId);
-    });
-    const sessionIds = weekSessions.map(s => s.id);
-    const weekAttendance = attendance.filter(a => sessionIds.includes(a.sessionId));
-    
-    return {
-      absent: weekAttendance.filter(a => a.status === AttendanceStatus.ABSENT).length,
-      late: weekAttendance.filter(a => a.status === AttendanceStatus.LATE).length,
-      injured: weekAttendance.filter(a => a.status === AttendanceStatus.INJURED).length
-    };
-  }, [sessions, attendance, visibleSquads]);
-
   // --- Logic for Admin ---
   const [newUser, setNewUser] = useState<Partial<User>>({ role: UserRole.STAFF, name: '', username: '', allowedSquads: [] });
-  
-  const handleUserSquadChange = (squadId: string) => {
-    let current = newUser.allowedSquads || [];
-    if (current.includes(squadId)) {
-      current = current.filter(id => id !== squadId);
-    } else {
-      current = [...current, squadId];
-    }
-    setNewUser({ ...newUser, allowedSquads: current });
-  };
+  const [newSquadName, setNewSquadName] = useState('');
 
   const addUser = () => {
     if (!newUser.name || !newUser.username) return;
@@ -298,14 +528,25 @@ const App: React.FC = () => {
     setNewUser({ role: UserRole.STAFF, name: '', username: '', allowedSquads: [] });
   };
 
-  const resetPassword = (userId: string) => {
-    const updated = users.map(u => u.id === userId ? { ...u, password: '123' } : u);
-    setUsers(updated);
-    storageService.saveUsers(updated);
-    alert("Password reposta para '123'.");
+  const handleUserSquadChange = (squadId: string) => {
+    setNewUser(prev => {
+        const current = prev.allowedSquads || [];
+        if (current.includes(squadId)) {
+            return { ...prev, allowedSquads: current.filter(id => id !== squadId) };
+        } else {
+            return { ...prev, allowedSquads: [...current, squadId] };
+        }
+    });
   };
   
-  const [newSquadName, setNewSquadName] = useState('');
+  const deleteUser = (id: string) => {
+      if(confirm('Eliminar utilizador?')) {
+          const updated = users.filter(u => u.id !== id);
+          setUsers(updated);
+          storageService.saveUsers(updated);
+      }
+  }
+
   const addSquad = () => {
     if(!newSquadName) return;
     const s: Squad = { id: crypto.randomUUID(), name: newSquadName };
@@ -313,6 +554,14 @@ const App: React.FC = () => {
     setSquads(updated);
     storageService.saveSquads(updated);
     setNewSquadName('');
+  }
+  
+  const deleteSquad = (id: string) => {
+      if(confirm('Eliminar escalão? Todos os dados associados serão perdidos visualmente.')) {
+          const updated = squads.filter(s => s.id !== id);
+          setSquads(updated);
+          storageService.saveSquads(updated);
+      }
   }
 
   // Common Input Class
@@ -326,56 +575,36 @@ const App: React.FC = () => {
       <div className="min-h-screen bg-slate-900 flex items-center justify-center p-4">
         <div className="bg-white rounded-2xl p-8 max-w-md w-full shadow-2xl">
           <div className="flex justify-center mb-6">
-             <div className="bg-emerald-600 p-3 rounded-xl">
-               <Shield className="w-8 h-8 text-white" />
-             </div>
+             <img 
+               src={CLUB_LOGO_URL} 
+               alt={CLUB_NAME} 
+               className="h-32 w-auto object-contain drop-shadow-md"
+             />
           </div>
-          <h1 className="text-2xl font-bold text-center text-slate-800 mb-2">CDN Team Manager</h1>
-          <p className="text-center text-slate-500 mb-8">Gestão Profissional</p>
+          <h1 className="text-xl font-bold text-center text-slate-800 mb-8">{CLUB_NAME}</h1>
           <form onSubmit={handleLogin} className="space-y-4">
             <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">Username</label>
-              <input 
-                type="text" 
+              <label className="block text-sm font-medium text-slate-700 mb-1">Selecionar Utilizador</label>
+              <select 
                 className={loginInputClass}
-                value={loginUsername}
-                onChange={(e) => setLoginUsername(e.target.value)}
-                placeholder="Ex: admin"
-              />
+                value={selectedLoginUserId}
+                onChange={(e) => setSelectedLoginUserId(e.target.value)}
+              >
+                <option value="">Selecione...</option>
+                {users.map(u => (
+                    <option key={u.id} value={u.id}>{u.name} ({u.role})</option>
+                ))}
+              </select>
             </div>
-            <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">Password</label>
-              <input 
-                type="password" 
-                className={loginInputClass}
-                value={loginPassword}
-                onChange={(e) => setLoginPassword(e.target.value)}
-                placeholder="********"
-              />
-            </div>
-            <button className="w-full py-3 bg-emerald-600 text-white font-bold rounded-lg hover:bg-emerald-700 transition shadow-lg">
+            
+            <button className="w-full py-3 bg-emerald-600 text-white font-bold rounded-lg hover:bg-emerald-700 transition shadow-lg mt-4">
               Entrar
             </button>
-            <div className="text-xs text-center text-slate-400 mt-4">
-              Demo: admin / 123
-            </div>
           </form>
         </div>
       </div>
     );
   }
-
-  // AI Handler
-  const handleAiGenerate = async () => {
-    setIsLoading(true);
-    setAiResponse('');
-    const squad = squads.find(s => s.id === aiPromptData.squadId);
-    if (!squad) { alert("Selecione um escalão."); setIsLoading(false); return; }
-    const playerCount = players.filter(p => p.squadId === squad.id).length;
-    const plan = await generateTrainingPlan(squad, aiPromptData.focus, aiPromptData.duration, playerCount);
-    setAiResponse(plan);
-    setIsLoading(false);
-  };
 
   return (
     <Layout user={currentUser!} currentView={currentView} onNavigate={setCurrentView} onLogout={handleLogout}>
@@ -383,34 +612,26 @@ const App: React.FC = () => {
       {/* DASHBOARD VIEW */}
       {currentView === 'DASHBOARD' && (
         <div className="space-y-6">
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4 md:gap-6">
-            <div className="bg-white p-4 md:p-6 rounded-xl shadow-sm border border-slate-200">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 md:gap-6">
+            <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
               <h3 className="text-slate-500 text-sm font-medium mb-1">Meus Atletas</h3>
-              <p className="text-2xl md:text-3xl font-bold text-slate-800">{visiblePlayers.length}</p>
+              <p className="text-3xl font-bold text-slate-800">{visiblePlayers.length}</p>
             </div>
-            <div className="bg-white p-4 md:p-6 rounded-xl shadow-sm border border-slate-200">
-               <h3 className="text-slate-500 text-sm font-medium mb-1">Faltas (Semana)</h3>
-               <p className="text-2xl md:text-3xl font-bold text-red-600">{weeklyStats.absent}</p>
-            </div>
-            <div className="bg-white p-4 md:p-6 rounded-xl shadow-sm border border-slate-200">
-               <h3 className="text-slate-500 text-sm font-medium mb-1">Atrasos (Semana)</h3>
-               <p className="text-2xl md:text-3xl font-bold text-yellow-600">{weeklyStats.late}</p>
-            </div>
-             <div className="bg-white p-4 md:p-6 rounded-xl shadow-sm border border-slate-200">
-               <h3 className="text-slate-500 text-sm font-medium mb-1">Lesionados</h3>
-               <p className="text-2xl md:text-3xl font-bold text-orange-600">{weeklyStats.injured}</p>
+            <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
+              <h3 className="text-slate-500 text-sm font-medium mb-1">Escalões</h3>
+              <p className="text-3xl font-bold text-emerald-600">{visibleSquads.length}</p>
             </div>
           </div>
 
           <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
-             <h3 className="text-lg font-bold text-slate-800 mb-4">Próximos Treinos (Meus Escalões)</h3>
+             <h3 className="text-lg font-bold text-slate-800 mb-4">Próximos Treinos</h3>
              {sessions.filter(s => visibleSquads.map(sq=>sq.id).includes(s.squadId)).length === 0 ? (
                <p className="text-slate-500 italic">Sem treinos agendados.</p>
              ) : (
                <div className="space-y-3">
                  {sessions
                    .filter(s => visibleSquads.map(sq=>sq.id).includes(s.squadId))
-                   .sort((a,b) => new Date(a.date).getTime() - new Date(b.date).getTime())
+                   .sort((a,b) => new Date(a.date).getTime() - new Date(a.date).getTime())
                    .slice(0, 5)
                    .map(s => (
                    <div key={s.id} className="flex flex-col sm:flex-row sm:items-center justify-between p-4 bg-slate-50 rounded-lg border border-slate-100">
@@ -482,7 +703,7 @@ const App: React.FC = () => {
                         <th className="p-4 font-semibold text-slate-600 text-sm">Nome</th>
                         <th className="p-4 font-semibold text-slate-600 text-sm">Idade</th>
                         <th className="p-4 font-semibold text-slate-600 text-sm hidden md:table-cell">Escalão</th>
-                        <th className="p-4 font-semibold text-slate-600 text-sm hidden lg:table-cell">Emergência</th>
+                        <th className="p-4 font-semibold text-slate-600 text-sm hidden lg:table-cell">Posições</th>
                         <th className="p-4 font-semibold text-slate-600 text-sm text-right">Ações</th>
                       </tr>
                     </thead>
@@ -503,12 +724,7 @@ const App: React.FC = () => {
                             </span>
                           </td>
                           <td className="p-4 text-sm text-slate-600 hidden lg:table-cell">
-                            {player.emergencyName && (
-                              <div>
-                                <span className="font-medium">{player.emergencyName}</span>
-                                <div className="text-xs text-slate-400">{player.emergencyContact}</div>
-                              </div>
-                            )}
+                             {player.sportsDetails?.positions || '-'}
                           </td>
                           <td className="p-4 text-right whitespace-nowrap">
                             <button onClick={() => setEditingPlayer(player)} className="p-1 text-slate-400 hover:text-blue-600 transition inline-block"><Edit2 className="w-5 h-5"/></button>
@@ -532,51 +748,68 @@ const App: React.FC = () => {
 
       {/* MATCHES VIEW */}
       {currentView === 'MATCHES' && (
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            <div className="lg:col-span-1 space-y-4">
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 h-[calc(100vh-140px)]">
+            <div className="lg:col-span-1 flex flex-col h-full space-y-4">
                  <div className="flex justify-between items-center">
                  <h2 className="text-lg font-bold text-slate-800">Jogos</h2>
                  <button 
-                  onClick={() => setIsCreatingMatch(!isCreatingMatch)}
+                  onClick={() => openMatchModal()}
                   className="p-2 bg-emerald-100 text-emerald-700 rounded-lg hover:bg-emerald-200"
                  >
                    <Plus className="w-5 h-5" />
                  </button>
               </div>
 
-              {isCreatingMatch && (
+              {isMatchModalOpen && (
                 <div className="bg-white p-4 rounded-lg shadow border border-emerald-100 mb-4 animate-in fade-in slide-in-from-top-2">
                    <div className="space-y-3">
-                     <input type="date" className={inputClass} onChange={e => setNewMatchData({...newMatchData, date: e.target.value})} />
-                     <input type="time" className={inputClass} defaultValue="15:00" onChange={e => setNewMatchData({...newMatchData, time: e.target.value})} />
-                     <input placeholder="Adversário" className={inputClass} onChange={e => setNewMatchData({...newMatchData, opponent: e.target.value})} />
-                     <select className={inputClass} onChange={e => setNewMatchData({...newMatchData, location: e.target.value as any})}>
+                     <div className="grid grid-cols-2 gap-2">
+                        <input type="date" className={inputClass} value={editingMatch.date} onChange={e => setEditingMatch({...editingMatch, date: e.target.value})} />
+                        <input type="time" className={inputClass} value={editingMatch.time} onChange={e => setEditingMatch({...editingMatch, time: e.target.value})} />
+                     </div>
+                     <input placeholder="Adversário" className={inputClass} value={editingMatch.opponent} onChange={e => setEditingMatch({...editingMatch, opponent: e.target.value})} />
+                     <div className="grid grid-cols-2 gap-2">
+                         <input placeholder="Kit Jogador" className={inputClass} value={editingMatch.playerKit || ''} onChange={e => setEditingMatch({...editingMatch, playerKit: e.target.value})} />
+                         <input placeholder="Kit GR" className={inputClass} value={editingMatch.goalkeeperKit || ''} onChange={e => setEditingMatch({...editingMatch, goalkeeperKit: e.target.value})} />
+                     </div>
+                     <textarea placeholder="Notas..." className={inputClass} value={editingMatch.notes || ''} onChange={e => setEditingMatch({...editingMatch, notes: e.target.value})} />
+                     <select className={inputClass} value={editingMatch.location} onChange={e => setEditingMatch({...editingMatch, location: e.target.value as any})}>
                        <option value="Casa">Casa</option>
                        <option value="Fora">Fora</option>
                      </select>
-                     <select className={inputClass} onChange={e => setNewMatchData({...newMatchData, squadId: e.target.value})}>
+                     <select className={inputClass} value={editingMatch.squadId} onChange={e => setEditingMatch({...editingMatch, squadId: e.target.value})}>
                        <option value="">Escalão...</option>
                        {visibleSquads.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
                      </select>
-                     <button onClick={createMatch} className="w-full py-2 bg-emerald-600 text-white rounded hover:bg-emerald-700">Criar Jogo</button>
+                     <div className="flex gap-2">
+                         <button onClick={() => setIsMatchModalOpen(false)} className="flex-1 py-2 bg-slate-100 text-slate-600 rounded">Cancelar</button>
+                         <button onClick={saveMatch} className="flex-1 py-2 bg-emerald-600 text-white rounded hover:bg-emerald-700">Guardar</button>
+                     </div>
                    </div>
                 </div>
               )}
 
-              <div className="space-y-2 lg:h-[500px] overflow-y-auto">
+              <div className="space-y-2 flex-1 overflow-y-auto">
                 {matches
                   .filter(m => visibleSquads.map(s => s.id).includes(m.squadId))
                   .sort((a,b) => new Date(b.date).getTime() - new Date(a.date).getTime())
                   .map(match => (
                   <div 
                     key={match.id}
-                    onClick={() => setSelectedMatchId(match.id)}
-                    className={`p-4 rounded-lg cursor-pointer transition border ${
+                    className={`p-4 rounded-lg cursor-pointer transition border relative group ${
                       selectedMatchId === match.id 
                         ? 'bg-emerald-600 text-white border-emerald-600 shadow-md' 
                         : 'bg-white hover:bg-slate-50 border-slate-200 text-slate-700'
                     }`}
+                    onClick={() => setSelectedMatchId(match.id)}
                   >
+                    <button 
+                        onClick={(e) => { e.stopPropagation(); openMatchModal(match); }}
+                        className="absolute top-2 right-2 p-1 bg-white/20 hover:bg-white/40 rounded text-inherit opacity-0 group-hover:opacity-100 transition"
+                    >
+                        <Edit2 className="w-4 h-4" />
+                    </button>
+
                     <div className="font-bold flex justify-between items-start">
                       <div>
                         <div>{match.opponent}</div>
@@ -594,52 +827,312 @@ const App: React.FC = () => {
               </div>
             </div>
 
-            <div className="lg:col-span-2">
+            <div className="lg:col-span-2 h-full flex flex-col">
                 {selectedMatchId ? (
-                   <div className="bg-white rounded-xl shadow-sm border border-slate-200 h-full flex flex-col">
-                      <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50 rounded-t-xl">
-                        <div className="flex items-center">
-                            <Flag className="w-5 h-5 mr-2 text-emerald-600" />
-                            <h3 className="font-bold text-slate-700">Convocatória</h3>
+                   <div className="bg-white rounded-xl shadow-sm border border-slate-200 h-full flex flex-col overflow-hidden">
+                      {/* Match Header */}
+                      <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50">
+                         <div className="flex gap-2 overflow-x-auto pb-1">
+                             <button 
+                                onClick={() => setActiveGameTab('LINEUP')}
+                                className={`px-3 py-1.5 rounded-lg text-sm font-medium transition whitespace-nowrap ${activeGameTab === 'LINEUP' ? 'bg-emerald-600 text-white' : 'text-slate-600 hover:bg-slate-200'}`}
+                             >
+                                 Convocatória
+                             </button>
+                             <button 
+                                onClick={() => setActiveGameTab('TACTICS')}
+                                className={`px-3 py-1.5 rounded-lg text-sm font-medium transition whitespace-nowrap ${activeGameTab === 'TACTICS' ? 'bg-emerald-600 text-white' : 'text-slate-600 hover:bg-slate-200'}`}
+                             >
+                                 Titulares (Quadro)
+                             </button>
+                             <button 
+                                onClick={() => setActiveGameTab('LIVE')}
+                                className={`px-3 py-1.5 rounded-lg text-sm font-medium transition whitespace-nowrap flex items-center ${activeGameTab === 'LIVE' ? 'bg-red-600 text-white animate-pulse' : 'text-slate-600 hover:bg-slate-200'}`}
+                             >
+                                 <Play className="w-3 h-3 mr-1" /> Jogo
+                             </button>
+                         </div>
+                        <div className="flex space-x-2">
+                           <button onClick={() => copyConvocation(selectedMatchId)} className="p-2 text-slate-500 hover:bg-slate-200 rounded"><Copy className="w-4 h-4"/></button>
+                           <button onClick={() => downloadConvocationPDF(selectedMatchId)} className="p-2 text-emerald-600 hover:bg-emerald-100 rounded">
+                               {isGeneratingPdf ? <Loader2 className="w-4 h-4 animate-spin"/> : <FileDown className="w-4 h-4"/>}
+                           </button>
                         </div>
-                        <button onClick={() => copyConvocation(selectedMatchId)} className="flex items-center text-xs bg-white border px-2 py-1 rounded hover:bg-slate-50 text-slate-600">
-                           <Copy className="w-3 h-3 mr-1"/> <span className="hidden sm:inline">Copiar Texto</span>
-                        </button>
                       </div>
-                      <div className="p-4 overflow-y-auto flex-1">
-                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                            {players
-                               .filter(p => p.squadId === matches.find(m => m.id === selectedMatchId)?.squadId)
-                               .map(player => {
-                                 const isSelected = matches.find(m => m.id === selectedMatchId)?.convokedIds.includes(player.id);
-                                 return (
-                                   <div 
-                                     key={player.id} 
-                                     onClick={() => toggleConvocation(selectedMatchId, player.id)}
-                                     className={`flex items-center p-3 rounded-lg border cursor-pointer transition ${
-                                       isSelected 
-                                         ? 'bg-emerald-50 border-emerald-500 ring-1 ring-emerald-500' 
-                                         : 'bg-white border-slate-200 hover:border-emerald-200'
-                                     }`}
-                                   >
-                                      <div className={`w-5 h-5 rounded border mr-3 flex items-center justify-center ${isSelected ? 'bg-emerald-600 border-emerald-600' : 'border-slate-300'}`}>
-                                         {isSelected && <Check className="w-3 h-3 text-white" />}
+
+                      {/* Content Area */}
+                      <div className="flex-1 overflow-y-auto p-4 bg-slate-50/50">
+                          
+                          {/* CONVOCATORIA TAB */}
+                          {activeGameTab === 'LINEUP' && (
+                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                                {players
+                                   .filter(p => p.squadId === matches.find(m => m.id === selectedMatchId)?.squadId)
+                                   .map(player => {
+                                     const isSelected = matches.find(m => m.id === selectedMatchId)?.convokedIds.includes(player.id);
+                                     const isStarter = matches.find(m => m.id === selectedMatchId)?.gameData?.starters.includes(player.id);
+                                     
+                                     return (
+                                       <div 
+                                         key={player.id} 
+                                         onClick={() => toggleConvocation(selectedMatchId, player.id)}
+                                         className={`flex flex-col p-3 rounded-lg border cursor-pointer transition relative group ${
+                                           isSelected 
+                                             ? 'bg-emerald-50 border-emerald-500 ring-1 ring-emerald-500' 
+                                             : 'bg-white border-slate-200 hover:border-emerald-200'
+                                         }`}
+                                       >
+                                          <div className="flex items-center">
+                                            <div className={`w-5 h-5 rounded border mr-3 flex items-center justify-center ${isSelected ? 'bg-emerald-600 border-emerald-600' : 'border-slate-300'}`}>
+                                               {isSelected && <Check className="w-3 h-3 text-white" />}
+                                            </div>
+                                            <div className="flex-1">
+                                               <div className="text-sm font-medium text-slate-800 flex justify-between items-center">
+                                                   <span>{player.name}</span>
+                                                   {isSelected && (
+                                                      <span className={`text-[10px] px-2 py-0.5 rounded-full ${isStarter ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-200 text-slate-600'}`}>
+                                                          {isStarter ? 'Titular' : 'Banco'}
+                                                      </span>
+                                                   )}
+                                               </div>
+                                               <div className="text-xs text-slate-500">#{player.jerseyNumber} | {player.sportsDetails?.positions || 'S/ Pos'}</div>
+                                            </div>
+                                          </div>
+                                          
+                                          {/* Explicit Actions for Convoked Players */}
+                                          {isSelected && (
+                                              <div className="mt-2 pt-2 border-t border-emerald-100 flex gap-2">
+                                                  <button 
+                                                    onClick={(e) => toggleStarterStatus(selectedMatchId, player.id, e)}
+                                                    className={`flex-1 text-xs py-1 rounded text-center transition ${isStarter ? 'bg-white border border-slate-200 text-slate-600' : 'bg-emerald-600 text-white'}`}
+                                                  >
+                                                      {isStarter ? 'Mover p/ Banco' : 'Definir Titular'}
+                                                  </button>
+                                              </div>
+                                          )}
+                                       </div>
+                                     )
+                                   })}
+                             </div>
+                          )}
+
+                          {/* TACTICS / STARTERS TAB (VISUAL BOARD) */}
+                          {activeGameTab === 'TACTICS' && (
+                              <div className={`flex flex-col gap-4 ${isTacticsFullscreen ? 'fixed inset-0 z-50 bg-slate-900 p-4' : 'h-full'}`}>
+                                  <div className={`flex justify-between items-center ${isTacticsFullscreen ? 'text-white' : 'text-slate-600'}`}>
+                                     <div className="text-xs font-mono">
+                                       Arraste os jogadores para o campo para definir a equipa.
+                                     </div>
+                                     <button onClick={() => setIsTacticsFullscreen(!isTacticsFullscreen)} className="p-2 rounded hover:bg-white/10">
+                                         {isTacticsFullscreen ? <Minimize2 className="w-5 h-5" /> : <Maximize2 className="w-5 h-5" />}
+                                     </button>
+                                  </div>
+
+                                  <div className="flex flex-col md:flex-row gap-4 h-full min-h-[500px]">
+                                      {/* Bench List (Suplentes) */}
+                                      <div className={`w-full md:w-1/3 bg-white border border-slate-200 rounded-lg flex flex-col ${isTacticsFullscreen ? 'bg-slate-800 border-slate-700' : ''}`}>
+                                          <div className={`p-2 border-b text-xs font-bold uppercase ${isTacticsFullscreen ? 'bg-slate-700 text-slate-300 border-slate-600' : 'bg-slate-50 text-slate-500'}`}>
+                                              Suplentes / Não Escalados
+                                          </div>
+                                          <div className="overflow-y-auto flex-1 p-2 space-y-1">
+                                               {players
+                                                .filter(p => matches.find(m => m.id === selectedMatchId)?.convokedIds.includes(p.id))
+                                                .filter(p => !matches.find(m => m.id === selectedMatchId)?.gameData?.starters.includes(p.id))
+                                                .map(p => (
+                                                    <div 
+                                                        key={p.id} 
+                                                        onClick={() => setSelectedTacticsPlayerId(p.id === selectedTacticsPlayerId ? null : p.id)}
+                                                        className={`flex items-center p-2 rounded cursor-pointer border ${selectedTacticsPlayerId === p.id ? 'bg-emerald-600 text-white border-emerald-600 shadow-md transform scale-105' : isTacticsFullscreen ? 'bg-slate-700 border-slate-600 text-slate-200' : 'bg-slate-50 border-slate-100 hover:bg-slate-100'}`}
+                                                    >
+                                                        <span className={`w-6 h-6 flex items-center justify-center rounded-full text-xs font-bold mr-2 ${selectedTacticsPlayerId === p.id ? 'bg-white text-emerald-600' : 'bg-slate-400 text-slate-800'}`}>
+                                                            {p.jerseyNumber}
+                                                        </span>
+                                                        <span className="text-sm font-medium">{p.name}</span>
+                                                    </div>
+                                                ))}
+                                          </div>
                                       </div>
-                                      <div className="flex-1">
-                                         <div className="text-sm font-medium text-slate-800">{player.name}</div>
-                                         <div className="text-xs text-slate-500">#{player.jerseyNumber}</div>
+
+                                      {/* Field */}
+                                      <div 
+                                        ref={fieldRef}
+                                        className="flex-1 relative bg-emerald-600 rounded-lg border-4 border-white shadow-inner overflow-hidden select-none touch-none" 
+                                        onClick={handleFieldClick}
+                                        onPointerMove={handlePointerMove}
+                                      >
+                                           {/* Field Lines */}
+                                           <div className="absolute inset-4 border-2 border-white/40 opacity-70 pointer-events-none"></div>
+                                           <div className="absolute top-1/2 left-0 w-full h-0.5 bg-white/40 -translate-y-1/2 pointer-events-none"></div>
+                                           <div className="absolute top-1/2 left-1/2 w-32 h-32 border-2 border-white/40 rounded-full -translate-x-1/2 -translate-y-1/2 pointer-events-none"></div>
+                                           
+                                           {/* Players on Field */}
+                                           {matches.find(m => m.id === selectedMatchId)?.gameData?.starters.map(playerId => {
+                                               const player = players.find(p => p.id === playerId);
+                                               const pos = matches.find(m => m.id === selectedMatchId)?.gameData?.playerPositions?.[playerId] || {x: 50, y: 50};
+                                               
+                                               return (
+                                                   <div 
+                                                     key={playerId}
+                                                     className="absolute transform -translate-x-1/2 -translate-y-1/2 flex flex-col items-center cursor-move transition-transform hover:scale-110 z-10"
+                                                     style={{ left: `${pos.x}%`, top: `${pos.y}%`, touchAction: 'none' }}
+                                                     onPointerDown={(e) => handlePointerDown(e, playerId)}
+                                                     onPointerUp={handlePointerUp}
+                                                   >
+                                                       <div className={`w-10 h-10 lg:w-14 lg:h-14 rounded-full flex items-center justify-center font-bold text-white border-2 shadow-lg text-lg ${draggingPlayerId === playerId ? 'bg-yellow-500 border-white scale-125 z-50' : 'bg-red-600 border-white'}`}>
+                                                           {player?.jerseyNumber}
+                                                       </div>
+                                                       <div className="mt-1 px-1 bg-black/50 text-white text-[10px] lg:text-xs rounded backdrop-blur-sm whitespace-nowrap">
+                                                           {player?.name.split(' ')[0]}
+                                                       </div>
+                                                       <button 
+                                                         className="absolute -top-1 -right-1 bg-white text-red-600 rounded-full p-0.5 shadow hover:scale-110 opacity-80 hover:opacity-100"
+                                                         onClick={(e) => { e.stopPropagation(); removeStarter(playerId); }}
+                                                         onPointerDown={(e) => e.stopPropagation()}
+                                                       >
+                                                           <XIcon className="w-3 h-3 lg:w-4 lg:h-4"/>
+                                                       </button>
+                                                   </div>
+                                               )
+                                           })}
+
+                                           {/* Guide Text */}
+                                           {!matches.find(m => m.id === selectedMatchId)?.gameData?.starters.length && (
+                                               <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                                                   <span className="text-white/30 text-2xl font-bold uppercase">Campo de Jogo</span>
+                                               </div>
+                                           )}
+                                      </div>
+                                  </div>
+                              </div>
+                          )}
+
+                          {/* LIVE GAME TAB */}
+                          {activeGameTab === 'LIVE' && matches.find(m => m.id === selectedMatchId) && (
+                              <div className="flex flex-col h-full space-y-4">
+                                  {/* Scoreboard / Timer */}
+                                  <div className="bg-slate-900 text-white p-4 rounded-xl shadow-lg flex justify-between items-center">
+                                      <div>
+                                          <div className="text-xs text-slate-400 uppercase flex items-center gap-2">
+                                              Tempo de Jogo
+                                              {matches.find(m => m.id === selectedMatchId)?.gameData?.isTimerRunning ? 
+                                                <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse"/> : 
+                                                <span className="w-2 h-2 rounded-full bg-slate-500"/>
+                                              }
+                                          </div>
+                                          <div className="flex items-center gap-4">
+                                              <div className="text-4xl font-mono font-bold tracking-wider text-emerald-400">
+                                                  {formatTime(matches.find(m => m.id === selectedMatchId)?.gameData?.timer || 0)}
+                                              </div>
+                                              <button 
+                                                onClick={() => toggleTimer(selectedMatchId!)}
+                                                className={`p-2 rounded-full border ${matches.find(m => m.id === selectedMatchId)?.gameData?.isTimerRunning ? 'bg-yellow-500/20 border-yellow-500 text-yellow-500' : 'bg-emerald-500/20 border-emerald-500 text-emerald-500'}`}
+                                              >
+                                                  {matches.find(m => m.id === selectedMatchId)?.gameData?.isTimerRunning ? <Pause className="w-5 h-5" /> : <Play className="w-5 h-5" />}
+                                              </button>
+                                          </div>
+                                      </div>
+                                      
+                                      <div className="flex space-x-2">
+                                          {['1H', 'HT', '2H', 'FT'].map((p) => {
+                                              const current = matches.find(m => m.id === selectedMatchId)?.gameData?.currentPeriod;
+                                              return (
+                                                  <button 
+                                                    key={p}
+                                                    onClick={() => setGamePeriod(selectedMatchId, p as any)}
+                                                    className={`px-3 py-1 rounded text-xs font-bold transition ${current === p ? 'bg-emerald-500 text-white' : 'bg-slate-800 text-slate-500 hover:bg-slate-700'}`}
+                                                  >
+                                                      {p === '1H' ? '1ª P' : p === 'HT' ? 'INT' : p === '2H' ? '2ª P' : 'FIM'}
+                                                  </button>
+                                              )
+                                          })}
+                                      </div>
+                                  </div>
+
+                                  {/* Active Players (Starters) - Minute Tracking */}
+                                  <div className="flex-1 bg-white rounded-xl border border-slate-200 overflow-hidden flex flex-col">
+                                      <div className="p-3 border-b border-slate-100 bg-emerald-50 text-emerald-800 font-bold text-sm flex justify-between">
+                                          <span>Em Campo (Titulares)</span>
+                                          <span>Minutos</span>
+                                      </div>
+                                      <div className="overflow-y-auto flex-1 p-2 space-y-2">
+                                         {players
+                                            .filter(p => matches.find(m => m.id === selectedMatchId)?.gameData?.starters.includes(p.id))
+                                            .map(p => (
+                                                <div key={p.id} className="flex justify-between items-center p-2 border rounded-lg bg-white shadow-sm">
+                                                    <div className="flex items-center">
+                                                        <span className="w-6 h-6 rounded-full bg-slate-200 text-slate-600 flex items-center justify-center text-xs font-bold mr-2">{p.jerseyNumber}</span>
+                                                        <span className="font-medium text-slate-800">{p.name}</span>
+                                                    </div>
+                                                    <div className="flex items-center space-x-3">
+                                                        <span className="font-mono text-lg font-bold text-slate-700">
+                                                            {matches.find(m => m.id === selectedMatchId)?.gameData?.playerMinutes?.[p.id] || 0}'
+                                                        </span>
+                                                        {/* Sub OUT Button */}
+                                                        <select 
+                                                            className="text-xs bg-red-50 text-red-700 border border-red-200 rounded p-1 max-w-[80px]"
+                                                            onChange={(e) => {
+                                                                if (e.target.value) {
+                                                                    handleSubstitution(selectedMatchId, p.id, e.target.value);
+                                                                    e.target.value = '';
+                                                                }
+                                                            }}
+                                                            defaultValue=""
+                                                        >
+                                                            <option value="" disabled>Sair...</option>
+                                                            {/* Only show convoked players NOT on field */}
+                                                            {players
+                                                                .filter(sub => matches.find(m => m.id === selectedMatchId)?.convokedIds.includes(sub.id))
+                                                                .filter(sub => !matches.find(m => m.id === selectedMatchId)?.gameData?.starters.includes(sub.id))
+                                                                .map(sub => (
+                                                                    <option key={sub.id} value={sub.id}>Entra: #{sub.jerseyNumber}</option>
+                                                                ))
+                                                            }
+                                                        </select>
+                                                    </div>
+                                                </div>
+                                            ))}
+                                      </div>
+                                  </div>
+
+                                   {/* Bench - Logic: Convoked MINUS Starters */}
+                                   <div className="h-1/3 bg-slate-50 rounded-xl border border-slate-200 overflow-hidden flex flex-col">
+                                      <div className="p-2 border-b border-slate-200 text-slate-500 font-bold text-xs">Banco (Suplentes)</div>
+                                      <div className="overflow-y-auto p-2 space-y-1">
+                                          {players
+                                            .filter(p => matches.find(m => m.id === selectedMatchId)?.convokedIds.includes(p.id))
+                                            .filter(p => !matches.find(m => m.id === selectedMatchId)?.gameData?.starters.includes(p.id))
+                                            .map(p => (
+                                                <div key={p.id} className="flex justify-between p-2 bg-white border rounded text-sm items-center">
+                                                    <span>{p.jerseyNumber}. {p.name}</span>
+                                                    
+                                                    {/* Quick Sub IN Logic */}
+                                                    <select 
+                                                        className="text-xs bg-emerald-50 text-emerald-700 border border-emerald-200 rounded p-1 max-w-[80px]"
+                                                        onChange={(e) => {
+                                                            if (e.target.value) {
+                                                                handleSubstitution(selectedMatchId, e.target.value, p.id);
+                                                                e.target.value = ''; // Reset select
+                                                            }
+                                                        }}
+                                                        defaultValue=""
+                                                    >
+                                                        <option value="" disabled>Entrar...</option>
+                                                        {matches.find(m => m.id === selectedMatchId)?.gameData?.starters.map(starterId => {
+                                                            const starter = players.find(sp => sp.id === starterId);
+                                                            return <option key={starterId} value={starterId}>Sai: {starter?.jerseyNumber}</option>
+                                                        })}
+                                                    </select>
+                                                </div>
+                                            ))}
                                       </div>
                                    </div>
-                                 )
-                               })}
-                         </div>
-                      </div>
-                      <div className="p-4 border-t border-slate-100 text-xs text-slate-500 text-right">
-                         Total Convocados: {matches.find(m => m.id === selectedMatchId)?.convokedIds.length}
+                              </div>
+                          )}
+
                       </div>
                    </div>
                 ) : (
-                  <div className="h-[200px] lg:h-full flex flex-col items-center justify-center text-slate-400 border-2 border-dashed border-slate-200 rounded-xl bg-slate-50">
+                  <div className="h-full flex flex-col items-center justify-center text-slate-400 border-2 border-dashed border-slate-200 rounded-xl bg-slate-50">
                     <Flag className="w-12 h-12 mb-2 opacity-50" />
                     <p>Selecione um jogo</p>
                  </div>
@@ -648,7 +1141,7 @@ const App: React.FC = () => {
         </div>
       )}
 
-      {/* TRAINING & ATTENDANCE VIEW */}
+      {/* TRAINING VIEW */}
       {currentView === 'TRAINING' && (
         <div className="space-y-6">
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -657,29 +1150,32 @@ const App: React.FC = () => {
               <div className="flex justify-between items-center">
                  <h2 className="text-lg font-bold text-slate-800">Sessões</h2>
                  <button 
-                  onClick={() => setIsCreatingSession(!isCreatingSession)}
+                  onClick={() => openSessionModal()}
                   className="p-2 bg-emerald-100 text-emerald-700 rounded-lg hover:bg-emerald-200"
                  >
                    <Plus className="w-5 h-5" />
                  </button>
               </div>
 
-              {isCreatingSession && (
-                <div className="bg-white p-4 rounded-lg shadow border border-emerald-100 mb-4 animate-in fade-in slide-in-from-top-2">
+              {isSessionModalOpen && (
+                 <div className="bg-white p-4 rounded-lg shadow border border-emerald-100 mb-4 animate-in fade-in slide-in-from-top-2">
                    <div className="space-y-3">
-                     <input type="date" className={inputClass} onChange={e => setNewSessionData({...newSessionData, date: e.target.value})} />
-                     <input type="time" className={inputClass} defaultValue="19:00" onChange={e => setNewSessionData({...newSessionData, time: e.target.value})} />
-                     <select className={inputClass} onChange={e => setNewSessionData({...newSessionData, squadId: e.target.value})}>
+                     <input type="date" className={inputClass} value={editingSession.date} onChange={e => setEditingSession({...editingSession, date: e.target.value})} />
+                     <input type="time" className={inputClass} value={editingSession.time} onChange={e => setEditingSession({...editingSession, time: e.target.value})} />
+                     <select className={inputClass} value={editingSession.squadId} onChange={e => setEditingSession({...editingSession, squadId: e.target.value})}>
                        <option value="">Escalão...</option>
                        {visibleSquads.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
                      </select>
-                     <input placeholder="Descrição..." className={inputClass} onChange={e => setNewSessionData({...newSessionData, description: e.target.value})} />
-                     <button onClick={createSession} className="w-full py-2 bg-emerald-600 text-white rounded hover:bg-emerald-700">Criar Treino</button>
+                     <input placeholder="Descrição..." className={inputClass} value={editingSession.description} onChange={e => setEditingSession({...editingSession, description: e.target.value})} />
+                     <div className="flex gap-2">
+                        <button onClick={() => setIsSessionModalOpen(false)} className="flex-1 py-2 bg-slate-100 text-slate-600 rounded">Cancelar</button>
+                        <button onClick={saveSession} className="flex-1 py-2 bg-emerald-600 text-white rounded hover:bg-emerald-700">Guardar</button>
+                     </div>
                    </div>
                 </div>
               )}
 
-              <div className="space-y-2 max-h-[300px] lg:max-h-[500px] overflow-y-auto">
+              <div className="space-y-2 max-h-[500px] overflow-y-auto">
                 {sessions
                   .filter(s => visibleSquads.map(sq=>sq.id).includes(s.squadId))
                   .sort((a,b) => new Date(b.date).getTime() - new Date(a.date).getTime())
@@ -687,12 +1183,19 @@ const App: React.FC = () => {
                   <div 
                     key={session.id}
                     onClick={() => setSelectedSessionId(session.id)}
-                    className={`p-4 rounded-lg cursor-pointer transition border ${
+                    className={`p-4 rounded-lg cursor-pointer transition border relative group ${
                       selectedSessionId === session.id 
                         ? 'bg-emerald-600 text-white border-emerald-600 shadow-md' 
                         : 'bg-white hover:bg-slate-50 border-slate-200 text-slate-700'
                     }`}
                   >
+                     <button 
+                        onClick={(e) => { e.stopPropagation(); openSessionModal(session); }}
+                        className="absolute top-2 right-2 p-1 bg-white/20 hover:bg-white/40 rounded text-inherit opacity-0 group-hover:opacity-100 transition"
+                    >
+                        <Edit2 className="w-4 h-4" />
+                    </button>
+
                     <div className="font-bold flex justify-between">
                       <span>{session.date}</span>
                       <span className={`text-xs px-2 py-0.5 rounded ${selectedSessionId === session.id ? 'bg-emerald-500' : 'bg-slate-100 text-slate-500'}`}>
@@ -767,86 +1270,6 @@ const App: React.FC = () => {
         </div>
       )}
 
-      {/* AI ASSISTANT VIEW */}
-      {currentView === 'AI_ASSISTANT' && (
-        <div className="max-w-4xl mx-auto space-y-6">
-           <div className="bg-gradient-to-r from-emerald-600 to-teal-600 p-8 rounded-2xl shadow-lg text-white">
-              <h2 className="text-2xl font-bold flex items-center mb-2">
-                <BrainCircuit className="w-8 h-8 mr-3" />
-                Assistente de Treino IA
-              </h2>
-              <p className="opacity-90 max-w-xl">
-                Gere planos de treino completos adaptados ao seu escalão, número de jogadores e foco técnico/tático em segundos.
-              </p>
-           </div>
-
-           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-              <div className="md:col-span-1 space-y-4">
-                 <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
-                    <h3 className="font-semibold text-slate-800 mb-4">Configuração</h3>
-                    
-                    <div className="space-y-4">
-                       <div>
-                         <label className="block text-sm font-medium text-slate-600 mb-1">Escalão</label>
-                         <select 
-                            className={inputClass}
-                            value={aiPromptData.squadId}
-                            onChange={(e) => setAiPromptData({...aiPromptData, squadId: e.target.value})}
-                         >
-                           <option value="">Selecione...</option>
-                           {visibleSquads.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
-                         </select>
-                       </div>
-
-                       <div>
-                         <label className="block text-sm font-medium text-slate-600 mb-1">Foco do Treino</label>
-                         <input 
-                            placeholder="Ex: Finalização..."
-                            className={inputClass}
-                            value={aiPromptData.focus}
-                            onChange={(e) => setAiPromptData({...aiPromptData, focus: e.target.value})}
-                         />
-                       </div>
-
-                       <div>
-                         <label className="block text-sm font-medium text-slate-600 mb-1">Duração (Min)</label>
-                         <input 
-                            type="number"
-                            className={inputClass}
-                            value={aiPromptData.duration}
-                            onChange={(e) => setAiPromptData({...aiPromptData, duration: parseInt(e.target.value)})}
-                         />
-                       </div>
-
-                       <button 
-                         onClick={handleAiGenerate}
-                         disabled={isLoading}
-                         className="w-full py-3 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition flex justify-center items-center font-medium disabled:opacity-50"
-                       >
-                         {isLoading ? 'A Gerar...' : 'Gerar Plano'}
-                       </button>
-                    </div>
-                 </div>
-              </div>
-
-              <div className="md:col-span-2">
-                <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200 min-h-[400px]">
-                   {aiResponse ? (
-                     <div className="prose prose-emerald max-w-none">
-                       <pre className="whitespace-pre-wrap font-sans text-slate-700">{aiResponse}</pre>
-                     </div>
-                   ) : (
-                     <div className="h-full flex flex-col items-center justify-center text-slate-400">
-                       <BrainCircuit className="w-16 h-16 mb-4 opacity-20" />
-                       <p>Configure e clique em "Gerar Plano" para ver a sugestão da IA.</p>
-                     </div>
-                   )}
-                </div>
-              </div>
-           </div>
-        </div>
-      )}
-
       {/* ADMIN VIEW */}
       {currentView === 'ADMIN' && (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
@@ -870,7 +1293,10 @@ const App: React.FC = () => {
                 {squads.map(s => (
                   <li key={s.id} className="flex justify-between p-3 bg-slate-50 rounded-lg border border-slate-100 items-center">
                     <span className="font-medium text-slate-700">{s.name}</span>
-                    <span className="text-xs bg-slate-200 px-2 py-1 rounded text-slate-500">{players.filter(p => p.squadId === s.id).length} atletas</span>
+                    <div className="flex items-center gap-2">
+                        <span className="text-xs bg-slate-200 px-2 py-1 rounded text-slate-500">{players.filter(p => p.squadId === s.id).length} atletas</span>
+                        <button onClick={() => deleteSquad(s.id)} className="text-red-400 hover:text-red-600 p-1"><Trash2 className="w-4 h-4"/></button>
+                    </div>
                   </li>
                 ))}
               </ul>
@@ -942,12 +1368,11 @@ const App: React.FC = () => {
                       </div>
                       <div className="flex flex-col items-end gap-1">
                         <span className="px-2 py-1 bg-slate-100 text-slate-600 text-xs font-semibold rounded">{u.role}</span>
-                        <button 
-                           onClick={() => resetPassword(u.id)}
-                           className="text-xs text-blue-500 hover:text-blue-700 underline flex items-center"
-                        >
-                           <KeyRound className="w-3 h-3 mr-1"/> Reset PW
-                        </button>
+                        {u.role !== UserRole.ADMIN && (
+                            <button onClick={() => deleteUser(u.id)} className="text-xs text-red-500 hover:text-red-700 flex items-center mt-1">
+                                <Trash2 className="w-3 h-3 mr-1"/> Eliminar
+                            </button>
+                        )}
                       </div>
                    </div>
                  ))}

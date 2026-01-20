@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { User, ViewState, UserRole } from '../types';
+import { CLUB_NAME, CLUB_LOGO_URL } from '../constants';
 import { 
   Users, 
   CalendarDays, 
@@ -8,7 +9,6 @@ import {
   Menu, 
   X,
   LayoutDashboard,
-  BrainCircuit,
   UserCircle,
   Flag
 } from 'lucide-react';
@@ -51,11 +51,13 @@ const Layout: React.FC<LayoutProps> = ({ user, currentView, onNavigate, onLogout
     <div className="flex h-screen bg-slate-50 overflow-hidden">
       {/* Sidebar (Desktop) */}
       <aside className="hidden md:flex flex-col w-64 bg-slate-900 border-r border-slate-800 text-white">
-        <div className="p-6 border-b border-slate-800 flex items-center justify-center">
-          <div className="bg-emerald-600 p-2 rounded-lg mr-2">
-            <LayoutDashboard className="w-6 h-6 text-white" />
-          </div>
-          <h1 className="text-xl font-bold tracking-tight">CDN Manager</h1>
+        <div className="p-6 border-b border-slate-800 flex items-center justify-center flex-col">
+          <img 
+            src={CLUB_LOGO_URL} 
+            alt={CLUB_NAME} 
+            className="w-24 h-24 object-contain mb-3 drop-shadow-lg"
+          />
+          <h1 className="text-sm font-bold tracking-tight text-center leading-tight">{CLUB_NAME}</h1>
         </div>
 
         <nav className="flex-1 p-4 overflow-y-auto">
@@ -63,9 +65,8 @@ const Layout: React.FC<LayoutProps> = ({ user, currentView, onNavigate, onLogout
             <p className="px-4 text-xs font-semibold text-slate-500 uppercase mb-2">Menu Principal</p>
             <NavItem view="DASHBOARD" icon={LayoutDashboard} label="Visão Geral" />
             <NavItem view="PLAYERS" icon={Users} label="Atletas" />
-            <NavItem view="TRAINING" icon={CalendarDays} label="Treinos e Presenças" />
-            <NavItem view="MATCHES" icon={Flag} label="Convocatórias" />
-            <NavItem view="AI_ASSISTANT" icon={BrainCircuit} label="Assistente IA" />
+            <NavItem view="TRAINING" icon={CalendarDays} label="Treinos" />
+            <NavItem view="MATCHES" icon={Flag} label="Jogos & Convocatórias" />
             
             {user.role === UserRole.ADMIN && (
                <>
@@ -100,10 +101,14 @@ const Layout: React.FC<LayoutProps> = ({ user, currentView, onNavigate, onLogout
         {/* Mobile Header */}
         <header className="md:hidden flex items-center justify-between p-4 bg-slate-900 text-white border-b border-slate-800 shadow-sm z-20">
           <div className="flex items-center">
-             <div className="bg-emerald-600 p-1.5 rounded mr-2">
-              <LayoutDashboard className="w-5 h-5 text-white" />
+            <img 
+              src={CLUB_LOGO_URL} 
+              alt={CLUB_NAME} 
+              className="w-10 h-10 object-contain mr-3"
+            />
+            <div>
+               <h1 className="text-xs font-bold leading-tight">{CLUB_NAME}</h1>
             </div>
-            <h1 className="text-lg font-bold">CDN Manager</h1>
           </div>
           <button onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)} className="p-2 text-slate-300 hover:bg-slate-800 rounded-lg">
             {isMobileMenuOpen ? <X className="w-6 h-6" /> : <Menu className="w-6 h-6" />}
@@ -115,9 +120,8 @@ const Layout: React.FC<LayoutProps> = ({ user, currentView, onNavigate, onLogout
           <div className="md:hidden absolute inset-0 z-10 bg-slate-900 text-white pt-20 px-4 pb-4 flex flex-col space-y-2 overflow-y-auto">
             <NavItem view="DASHBOARD" icon={LayoutDashboard} label="Visão Geral" />
             <NavItem view="PLAYERS" icon={Users} label="Atletas" />
-            <NavItem view="TRAINING" icon={CalendarDays} label="Treinos e Presenças" />
-            <NavItem view="MATCHES" icon={Flag} label="Convocatórias" />
-            <NavItem view="AI_ASSISTANT" icon={BrainCircuit} label="Assistente IA" />
+            <NavItem view="TRAINING" icon={CalendarDays} label="Treinos" />
+            <NavItem view="MATCHES" icon={Flag} label="Jogos" />
             {user.role === UserRole.ADMIN && (
                 <NavItem view="ADMIN" icon={Settings} label="Definições" />
             )}
