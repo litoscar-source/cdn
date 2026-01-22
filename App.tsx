@@ -8,7 +8,7 @@ import { CLUB_NAME, CLUB_LOGO_URL } from './constants';
 import Layout from './components/Layout';
 import PlayerForm from './components/PlayerForm';
 import { 
-  Plus, Search, Filter, Trash2, Edit2, Check, X as XIcon, AlertCircle, Clock, Save, UserPlus, Users, UserCircle, CalendarDays, KeyRound, Flag, Copy, FileDown, Loader2, Play, Pause, Square, Shirt, Shield, ArrowRightLeft, FileText, Move, Maximize2, Minimize2, UserMinus, UserCheck, Printer, RefreshCcw, Trophy, Minus, PlusCircle, RotateCcw
+  Plus, Search, Filter, Trash2, Edit2, Check, X as XIcon, AlertCircle, Clock, Save, UserPlus, Users, UserCircle, CalendarDays, KeyRound, Flag, Copy, FileDown, Loader2, Play, Pause, Square, Shirt, Shield, ArrowRightLeft, FileText, Move, Maximize2, Minimize2, UserMinus, UserCheck, Printer, RefreshCcw, Trophy, Minus, PlusCircle, RotateCcw, Smartphone
 } from 'lucide-react';
 
 const App: React.FC = () => {
@@ -47,6 +47,7 @@ const App: React.FC = () => {
   
   // Game Day UI State
   const [activeGameTab, setActiveGameTab] = useState<'LINEUP' | 'TACTICS' | 'LIVE'>('LINEUP');
+  const [mobileLiveTab, setMobileLiveTab] = useState<'FIELD' | 'BENCH'>('FIELD');
   
   // Tactics Selection State
   const [selectedTacticsPlayerId, setSelectedTacticsPlayerId] = useState<string | null>(null);
@@ -1301,66 +1302,63 @@ const App: React.FC = () => {
 
                           {/* LIVE GAME TAB (FULLSCREEN OPTIMIZED) */}
                           {activeGameTab === 'LIVE' && matches.find(m => m.id === selectedMatchId) && (
-                              <div className={`flex flex-col h-full space-y-4 ${isLiveGameFullscreen ? 'fixed inset-0 z-50 bg-slate-100 p-2 md:p-4' : ''}`}>
+                              <div className={`flex flex-col h-full space-y-3 ${isLiveGameFullscreen ? 'fixed inset-0 z-50 bg-slate-100 p-0 md:p-4' : ''}`}>
                                   {/* Scoreboard / Timer */}
-                                  <div className="bg-slate-900 text-white rounded-xl shadow-lg flex flex-col shrink-0 overflow-hidden">
+                                  <div className="bg-slate-900 text-white md:rounded-xl shadow-lg flex flex-col shrink-0 overflow-hidden relative">
+                                      {/* Floating Fullscreen Button */}
+                                      <button 
+                                        onClick={() => setIsLiveGameFullscreen(!isLiveGameFullscreen)} 
+                                        className="absolute top-2 right-2 p-2 bg-white/10 hover:bg-white/20 rounded-full text-white z-10"
+                                        title={isLiveGameFullscreen ? "Sair de Ecrã Inteiro" : "Ecrã Inteiro"}
+                                      >
+                                          {isLiveGameFullscreen ? <Minimize2 className="w-5 h-5"/> : <Maximize2 className="w-5 h-5"/>}
+                                      </button>
+
                                       {/* Top Section: Score & Timer */}
-                                      <div className="p-4 flex flex-col md:flex-row justify-between items-center gap-4">
-                                          {/* Score Display (Mobile Center) */}
-                                          <div className="flex items-center space-x-6 order-2 md:order-1 justify-center w-full md:w-auto">
+                                      <div className="p-3 pt-8 md:pt-4 flex flex-col items-center gap-3">
+                                          {/* Timer Display */}
+                                          <div className="flex items-center gap-3 bg-black/30 px-4 py-1 rounded-full border border-white/10">
+                                              {matches.find(m => m.id === selectedMatchId)?.gameData?.isTimerRunning ? 
+                                                <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse shadow-[0_0_8px_rgba(239,68,68,0.6)]"/> : 
+                                                <span className="w-2 h-2 rounded-full bg-slate-500"/>
+                                              }
+                                              <span className="font-mono font-bold tracking-widest text-2xl md:text-3xl text-white tabular-nums">
+                                                  {formatTime(matches.find(m => m.id === selectedMatchId)?.gameData?.timer || 0)}
+                                              </span>
+                                               <button 
+                                                onClick={() => toggleTimer(selectedMatchId!)}
+                                                className={`ml-2 p-1 rounded-full flex items-center justify-center transition active:scale-95 ${matches.find(m => m.id === selectedMatchId)?.gameData?.isTimerRunning ? 'bg-yellow-500 text-slate-900' : 'bg-emerald-600 text-white'}`}
+                                              >
+                                                  {matches.find(m => m.id === selectedMatchId)?.gameData?.isTimerRunning ? <Pause className="w-4 h-4 fill-current" /> : <Play className="w-4 h-4 fill-current ml-0.5" />}
+                                              </button>
+                                          </div>
+
+                                          {/* Score Display (Big & Bold) */}
+                                          <div className="flex items-center justify-center gap-4 md:gap-8 w-full">
                                               <div className="flex flex-col items-center">
-                                                  <span className="text-xs text-slate-400 uppercase font-bold tracking-widest">Nós</span>
-                                                  <span className="text-5xl md:text-4xl font-mono font-bold text-emerald-400">
+                                                  <span className="text-[10px] md:text-xs text-slate-400 uppercase font-bold tracking-widest mb-1">Nós</span>
+                                                  <span className="text-5xl md:text-6xl font-mono font-bold text-emerald-400 leading-none">
                                                       {matches.find(m => m.id === selectedMatchId)?.gameData?.events.filter(e => e.type === 'GOAL' && e.playerId !== 'opponent').length || 0}
                                                   </span>
                                               </div>
-                                              <div className="text-3xl text-slate-600 font-bold opacity-30">-</div>
+                                              <div className="text-xl text-slate-600 font-bold opacity-30">VS</div>
                                               <div className="flex flex-col items-center">
-                                                  <span className="text-xs text-slate-400 uppercase font-bold tracking-widest">Eles</span>
-                                                  <div className="flex items-center gap-3">
-                                                     <span className="text-5xl md:text-4xl font-mono font-bold text-red-400">
+                                                  <span className="text-[10px] md:text-xs text-slate-400 uppercase font-bold tracking-widest mb-1">Eles</span>
+                                                  <div className="flex items-center gap-2">
+                                                     <span className="text-5xl md:text-6xl font-mono font-bold text-red-400 leading-none">
                                                          {matches.find(m => m.id === selectedMatchId)?.gameData?.events.filter(e => e.type === 'GOAL' && e.playerId === 'opponent').length || 0}
                                                      </span>
-                                                     <div className="flex flex-col gap-1">
-                                                         <button onClick={() => handleOpponentGoal(selectedMatchId!, 'ADD')} className="p-1.5 bg-slate-800 hover:bg-slate-700 rounded-lg text-green-400 transition"><PlusCircle className="w-4 h-4"/></button>
-                                                         <button onClick={() => handleOpponentGoal(selectedMatchId!, 'REMOVE')} className="p-1.5 bg-slate-800 hover:bg-slate-700 rounded-lg text-red-400 transition"><Minus className="w-4 h-4"/></button>
+                                                     <div className="flex flex-col gap-1 ml-1">
+                                                         <button onClick={() => handleOpponentGoal(selectedMatchId!, 'ADD')} className="p-1 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded text-green-400 transition"><PlusCircle className="w-3 h-3"/></button>
+                                                         <button onClick={() => handleOpponentGoal(selectedMatchId!, 'REMOVE')} className="p-1 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded text-red-400 transition"><Minus className="w-3 h-3"/></button>
                                                      </div>
                                                   </div>
                                               </div>
                                           </div>
-
-                                          {/* Timer Controls */}
-                                          <div className="flex flex-col items-center gap-2 order-1 md:order-2 w-full md:w-auto border-b md:border-b-0 border-slate-800 pb-4 md:pb-0">
-                                               <div className="flex items-center gap-2 text-xs text-slate-400 uppercase font-bold tracking-widest">
-                                                  {matches.find(m => m.id === selectedMatchId)?.gameData?.isTimerRunning ? 
-                                                    <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse shadow-[0_0_8px_rgba(239,68,68,0.6)]"/> : 
-                                                    <span className="w-2 h-2 rounded-full bg-slate-600"/>
-                                                  }
-                                                  <span>Tempo de Jogo</span>
-                                              </div>
-                                              <div className="flex items-center gap-4">
-                                                  <div className={`font-mono font-bold tracking-wider text-white tabular-nums ${isLiveGameFullscreen ? 'text-6xl md:text-5xl' : 'text-5xl md:text-4xl'}`}>
-                                                      {formatTime(matches.find(m => m.id === selectedMatchId)?.gameData?.timer || 0)}
-                                                  </div>
-                                                  <button 
-                                                    onClick={() => toggleTimer(selectedMatchId!)}
-                                                    className={`rounded-full flex items-center justify-center transition active:scale-95 shadow-lg ${isLiveGameFullscreen ? 'w-16 h-16' : 'w-14 h-14'} ${matches.find(m => m.id === selectedMatchId)?.gameData?.isTimerRunning ? 'bg-yellow-500 text-slate-900 hover:bg-yellow-400' : 'bg-emerald-600 text-white hover:bg-emerald-500'}`}
-                                                  >
-                                                      {matches.find(m => m.id === selectedMatchId)?.gameData?.isTimerRunning ? <Pause className="w-6 h-6 fill-current" /> : <Play className="w-6 h-6 fill-current ml-1" />}
-                                                  </button>
-                                              </div>
-                                          </div>
-
-                                          {/* Fullscreen Toggle (Desktop) */}
-                                          <div className="hidden md:flex order-3">
-                                              <button onClick={() => setIsLiveGameFullscreen(!isLiveGameFullscreen)} className="text-slate-500 hover:text-white transition">
-                                                  {isLiveGameFullscreen ? <Minimize2 className="w-6 h-6"/> : <Maximize2 className="w-6 h-6"/>}
-                                              </button>
-                                          </div>
                                       </div>
 
-                                      {/* Bottom Section: Period Controls (Scrollable on Mobile) */}
-                                      <div className="bg-slate-800 p-2 flex overflow-x-auto gap-2 no-scrollbar">
+                                      {/* Period Controls (Scrollable on Mobile) */}
+                                      <div className="bg-slate-800 p-2 flex overflow-x-auto gap-2 no-scrollbar border-t border-slate-700">
                                           {['1H', 'HT', '2H', 'FT'].map((p) => {
                                               const current = matches.find(m => m.id === selectedMatchId)?.gameData?.currentPeriod;
                                               const isActive = current === p;
@@ -1368,149 +1366,176 @@ const App: React.FC = () => {
                                                   <button 
                                                     key={p}
                                                     onClick={() => setGamePeriod(selectedMatchId, p as any)}
-                                                    className={`flex-1 py-3 px-4 rounded-lg text-sm font-bold whitespace-nowrap transition active:scale-95 flex flex-col items-center justify-center ${isActive ? 'bg-slate-700 text-white shadow-inner ring-1 ring-slate-600' : 'bg-slate-900 text-slate-500 hover:bg-slate-700 hover:text-slate-300'}`}
+                                                    className={`flex-1 py-3 px-3 md:px-4 rounded text-sm md:text-base font-bold whitespace-nowrap transition active:scale-95 flex flex-col items-center justify-center min-w-[80px] ${isActive ? 'bg-slate-700 text-white shadow-inner ring-1 ring-emerald-500/50' : 'bg-slate-900/50 text-slate-500 hover:bg-slate-700 hover:text-slate-300'}`}
                                                   >
                                                       {p === '1H' && '1ª PARTE'}
                                                       {p === 'HT' && 'INTERVALO'}
                                                       {p === '2H' && '2ª PARTE'}
                                                       {p === 'FT' && 'FIM'}
-                                                      {isActive && <div className="h-1 w-8 bg-emerald-500 rounded-full mt-1"/>}
+                                                      {isActive && <div className="h-1 w-full max-w-[20px] bg-emerald-500 rounded-full mt-1"/>}
                                                   </button>
                                               )
                                           })}
                                       </div>
                                   </div>
 
-                                  {/* Active Players (Starters) - Minute Tracking */}
-                                  <div className="flex-1 bg-white rounded-xl border border-slate-200 overflow-hidden flex flex-col shadow-sm">
-                                      <div className="p-3 border-b border-slate-100 bg-emerald-50 text-emerald-800 font-bold text-sm flex justify-between shrink-0">
-                                          <span>Em Campo (Titulares)</span>
-                                          <span>Minutos</span>
-                                      </div>
-                                      <div className="overflow-y-auto flex-1 p-2 space-y-2">
-                                         {players
-                                            .filter(p => matches.find(m => m.id === selectedMatchId)?.gameData?.starters.includes(p.id))
-                                            .map(p => {
-                                                const goals = matches.find(m => m.id === selectedMatchId)?.gameData?.events.filter(e => e.type === 'GOAL' && e.playerId === p.id).length || 0;
-                                                return (
-                                                <div key={p.id} className={`flex flex-col sm:flex-row sm:justify-between sm:items-center border rounded-lg bg-white shadow-sm ${isLiveGameFullscreen ? 'p-3' : 'p-2'}`}>
-                                                    <div className="flex items-center mb-2 sm:mb-0">
-                                                        <span className={`rounded-full bg-slate-800 text-white flex items-center justify-center font-bold mr-3 shadow-sm ${isLiveGameFullscreen ? 'w-10 h-10 text-lg' : 'w-8 h-8 text-base'}`}>{p.jerseyNumber}</span>
-                                                        <div>
-                                                            <div className={`font-bold text-slate-800 leading-tight ${isLiveGameFullscreen ? 'text-lg' : 'text-base'}`}>{p.name}</div>
-                                                            {/* Simple Goal Indicator */}
-                                                            {goals > 0 && (
-                                                                <div className="flex items-center text-xs text-yellow-600 font-bold mt-0.5">
-                                                                    <Trophy className="w-3 h-3 mr-1 fill-yellow-500" /> {goals} {goals === 1 ? 'Golo' : 'Golos'}
+                                  {/* Mobile Tabs Switcher */}
+                                  <div className="flex md:hidden bg-slate-200 p-1 rounded-lg mx-2 shrink-0 shadow-inner">
+                                      <button 
+                                        onClick={() => setMobileLiveTab('FIELD')}
+                                        className={`flex-1 py-2 text-sm font-bold rounded-md transition flex items-center justify-center gap-2 ${mobileLiveTab === 'FIELD' ? 'bg-white text-slate-900 shadow' : 'text-slate-500'}`}
+                                      >
+                                          <Shirt className="w-4 h-4" />
+                                          EM CAMPO ({players.filter(p => matches.find(m => m.id === selectedMatchId)?.gameData?.starters.includes(p.id)).length})
+                                      </button>
+                                      <button 
+                                        onClick={() => setMobileLiveTab('BENCH')}
+                                        className={`flex-1 py-2 text-sm font-bold rounded-md transition flex items-center justify-center gap-2 ${mobileLiveTab === 'BENCH' ? 'bg-white text-slate-900 shadow' : 'text-slate-500'}`}
+                                      >
+                                          <UserCheck className="w-4 h-4" />
+                                          SUPLENTES ({players.filter(p => matches.find(m => m.id === selectedMatchId)?.convokedIds.includes(p.id) && !matches.find(m => m.id === selectedMatchId)?.gameData?.starters.includes(p.id)).length})
+                                      </button>
+                                  </div>
+
+                                  {/* Main Content Area - Split View on Desktop, Tabbed on Mobile */}
+                                  <div className="flex-1 overflow-hidden flex flex-col md:flex-row gap-4 px-2 md:px-0 pb-2">
+                                      
+                                      {/* FIELD PLAYERS LIST */}
+                                      <div className={`${mobileLiveTab === 'FIELD' ? 'flex' : 'hidden'} md:flex flex-1 bg-white rounded-xl border border-slate-200 overflow-hidden flex-col shadow-sm`}>
+                                          <div className="p-3 border-b border-slate-100 bg-emerald-50 text-emerald-800 font-bold text-sm flex justify-between shrink-0 items-center">
+                                              <span className="flex items-center"><Shirt className="w-4 h-4 mr-2"/> JOGADORES EM CAMPO</span>
+                                              <span className="text-xs font-normal bg-emerald-100 px-2 py-0.5 rounded text-emerald-700">Minutos</span>
+                                          </div>
+                                          <div className="overflow-y-auto flex-1 p-2 space-y-2">
+                                             {players
+                                                .filter(p => matches.find(m => m.id === selectedMatchId)?.gameData?.starters.includes(p.id))
+                                                .map(p => {
+                                                    const goals = matches.find(m => m.id === selectedMatchId)?.gameData?.events.filter(e => e.type === 'GOAL' && e.playerId === p.id).length || 0;
+                                                    return (
+                                                    <div key={p.id} className="flex flex-col border rounded-lg bg-white shadow-sm p-3 gap-3">
+                                                        <div className="flex justify-between items-start">
+                                                            <div className="flex items-center">
+                                                                <span className="w-8 h-8 rounded-full bg-slate-800 text-white flex items-center justify-center font-bold mr-3 shadow-sm text-sm">{p.jerseyNumber}</span>
+                                                                <div>
+                                                                    <div className="font-bold text-slate-800 leading-tight text-base">{p.name}</div>
+                                                                    {goals > 0 && (
+                                                                        <div className="flex items-center text-xs text-yellow-600 font-bold mt-0.5">
+                                                                            <Trophy className="w-3 h-3 mr-1 fill-yellow-500" /> {goals} {goals === 1 ? 'Golo' : 'Golos'}
+                                                                        </div>
+                                                                    )}
                                                                 </div>
-                                                            )}
+                                                            </div>
+                                                            <span className="font-mono font-bold text-slate-600 text-xl bg-slate-100 px-2 py-1 rounded">
+                                                                {matches.find(m => m.id === selectedMatchId)?.gameData?.playerMinutes?.[p.id] || 0}'
+                                                            </span>
+                                                        </div>
+                                                        
+                                                        <div className="flex items-center gap-2 pt-2 border-t border-slate-100">
+                                                            {/* Goal Controls */}
+                                                            <div className="flex items-center bg-slate-50 rounded-lg border border-slate-200 flex-1 justify-between px-1">
+                                                                <button 
+                                                                    onClick={() => handlePlayerGoal(selectedMatchId!, p.id, -1)}
+                                                                    disabled={goals === 0}
+                                                                    className={`p-3 md:p-2 flex items-center justify-center ${goals === 0 ? 'text-slate-300' : 'text-slate-600'}`}
+                                                                >
+                                                                    <Minus className="w-4 h-4" />
+                                                                </button>
+                                                                <span className="font-bold text-slate-800">{goals}</span>
+                                                                <button 
+                                                                    onClick={() => handlePlayerGoal(selectedMatchId!, p.id, 1)}
+                                                                    className="p-3 md:p-2 flex items-center justify-center text-emerald-600 active:scale-95 transition"
+                                                                >
+                                                                    <Plus className="w-4 h-4" />
+                                                                </button>
+                                                            </div>
+
+                                                            {/* Sub Out */}
+                                                            <div className="relative flex-1">
+                                                                <div className="bg-red-50 text-red-700 border border-red-200 rounded-lg flex items-center justify-center font-bold h-full py-2 cursor-pointer hover:bg-red-100 transition">
+                                                                    <ArrowRightLeft className="w-4 h-4 mr-2" /> SAIR
+                                                                </div>
+                                                                <select 
+                                                                    className="absolute inset-0 opacity-0 w-full h-full cursor-pointer"
+                                                                    onChange={(e) => {
+                                                                        if (e.target.value) {
+                                                                            handleSubstitution(selectedMatchId, p.id, e.target.value);
+                                                                            e.target.value = '';
+                                                                        }
+                                                                    }}
+                                                                    defaultValue=""
+                                                                >
+                                                                    <option value="" disabled>Substituir por...</option>
+                                                                    {players
+                                                                        .filter(sub => matches.find(m => m.id === selectedMatchId)?.convokedIds.includes(sub.id))
+                                                                        .filter(sub => !matches.find(m => m.id === selectedMatchId)?.gameData?.starters.includes(sub.id))
+                                                                        .map(sub => (
+                                                                            <option key={sub.id} value={sub.id}>Entra: #{sub.jerseyNumber} {sub.name}</option>
+                                                                        ))
+                                                                    }
+                                                                </select>
+                                                            </div>
                                                         </div>
                                                     </div>
-                                                    
-                                                    <div className="flex items-center justify-between sm:justify-end gap-3 w-full sm:w-auto">
-                                                        <span className={`font-mono font-bold text-slate-400 w-12 text-center ${isLiveGameFullscreen ? 'text-xl' : 'text-lg'}`}>
-                                                            {matches.find(m => m.id === selectedMatchId)?.gameData?.playerMinutes?.[p.id] || 0}'
+                                                )})}
+                                                {players.filter(p => matches.find(m => m.id === selectedMatchId)?.gameData?.starters.includes(p.id)).length === 0 && (
+                                                    <div className="text-center p-8 text-slate-400 italic">
+                                                        Nenhum jogador em campo.
+                                                    </div>
+                                                )}
+                                          </div>
+                                      </div>
+
+                                       {/* BENCH LIST */}
+                                       <div className={`${mobileLiveTab === 'BENCH' ? 'flex' : 'hidden'} md:flex w-full md:w-1/3 bg-white rounded-xl border border-slate-200 overflow-hidden flex-col shadow-sm`}>
+                                          <div className="p-3 border-b border-slate-100 bg-slate-50 text-slate-600 font-bold text-sm flex justify-between items-center shrink-0">
+                                              <span className="flex items-center"><UserCheck className="w-4 h-4 mr-2"/> BANCO</span>
+                                              <span className="bg-slate-200 px-2 py-0.5 rounded text-[10px] text-slate-600">
+                                                {players.filter(p => matches.find(m => m.id === selectedMatchId)?.convokedIds.includes(p.id))
+                                                .filter(p => !matches.find(m => m.id === selectedMatchId)?.gameData?.starters.includes(p.id)).length}
+                                              </span>
+                                          </div>
+                                          <div className="overflow-y-auto p-2 space-y-2">
+                                              {players
+                                                .filter(p => matches.find(m => m.id === selectedMatchId)?.convokedIds.includes(p.id))
+                                                .filter(p => !matches.find(m => m.id === selectedMatchId)?.gameData?.starters.includes(p.id))
+                                                .map(p => (
+                                                    <div key={p.id} className="flex justify-between bg-white border rounded-lg items-center p-3 shadow-sm">
+                                                        <span className="text-slate-800 font-medium text-base">
+                                                            <b className="mr-2 text-slate-500">#{p.jerseyNumber}</b> {p.name}
                                                         </span>
                                                         
-                                                        <div className="h-8 w-px bg-slate-200 mx-1 hidden sm:block"></div>
-
-                                                        {/* GOAL CONTROLS */}
-                                                        <div className="flex items-center bg-slate-100 rounded-lg p-1 border border-slate-200">
-                                                            <button 
-                                                                onClick={() => handlePlayerGoal(selectedMatchId!, p.id, -1)}
-                                                                disabled={goals === 0}
-                                                                className={`p-2 rounded hover:bg-white transition ${goals === 0 ? 'text-slate-300' : 'text-slate-600'}`}
-                                                            >
-                                                                <Minus className="w-4 h-4" />
-                                                            </button>
-                                                            <div className="w-8 text-center font-bold text-slate-800 flex flex-col items-center justify-center leading-none">
-                                                                <span className="text-lg">{goals}</span>
-                                                            </div>
-                                                            <button 
-                                                                onClick={() => handlePlayerGoal(selectedMatchId!, p.id, 1)}
-                                                                className="p-2 rounded bg-white text-emerald-600 shadow-sm border border-emerald-100 hover:text-emerald-700 active:scale-95 transition"
-                                                            >
-                                                                <Plus className="w-4 h-4" />
-                                                            </button>
-                                                        </div>
-
-                                                        {/* Sub OUT Button */}
+                                                        {/* Quick Sub IN Logic */}
                                                         <div className="relative">
-                                                            <div className={`bg-red-50 text-red-700 border border-red-200 rounded-lg flex items-center justify-center font-bold active:bg-red-100 transition cursor-pointer ${isLiveGameFullscreen ? 'px-4 py-2 text-sm' : 'px-3 py-2 text-xs'}`}>
-                                                                <ArrowRightLeft className={`mr-1.5 ${isLiveGameFullscreen ? 'w-4 h-4' : 'w-3 h-3'}`} /> Sair
-                                                            </div>
+                                                             <div className="bg-emerald-50 text-emerald-700 border border-emerald-200 rounded-lg flex items-center justify-center font-bold px-3 py-2 text-xs cursor-pointer hover:bg-emerald-100 transition">
+                                                                <ArrowRightLeft className="w-3 h-3 mr-1.5" /> ENTRAR
+                                                             </div>
                                                             <select 
                                                                 className="absolute inset-0 opacity-0 w-full h-full cursor-pointer"
                                                                 onChange={(e) => {
                                                                     if (e.target.value) {
-                                                                        handleSubstitution(selectedMatchId, p.id, e.target.value);
-                                                                        e.target.value = '';
+                                                                        handleSubstitution(selectedMatchId, e.target.value, p.id);
+                                                                        e.target.value = ''; // Reset select
                                                                     }
                                                                 }}
                                                                 defaultValue=""
                                                             >
-                                                                <option value="" disabled>Substituir por...</option>
-                                                                {/* Only show convoked players NOT on field */}
-                                                                {players
-                                                                    .filter(sub => matches.find(m => m.id === selectedMatchId)?.convokedIds.includes(sub.id))
-                                                                    .filter(sub => !matches.find(m => m.id === selectedMatchId)?.gameData?.starters.includes(sub.id))
-                                                                    .map(sub => (
-                                                                        <option key={sub.id} value={sub.id}>Entra: #{sub.jerseyNumber} {sub.name}</option>
-                                                                    ))
-                                                                }
+                                                                <option value="" disabled>Substituir quem...</option>
+                                                                {matches.find(m => m.id === selectedMatchId)?.gameData?.starters.map(starterId => {
+                                                                    const starter = players.find(sp => sp.id === starterId);
+                                                                    return <option key={starterId} value={starterId}>Sai: #{starter?.jerseyNumber} {starter?.name}</option>
+                                                                })}
                                                             </select>
                                                         </div>
                                                     </div>
-                                                </div>
-                                            )})}
-                                      </div>
-                                  </div>
-
-                                   {/* Bench - Logic: Convoked MINUS Starters */}
-                                   <div className={`bg-slate-50 rounded-xl border border-slate-200 overflow-hidden flex flex-col shrink-0 ${isLiveGameFullscreen ? 'h-1/4' : 'h-1/3'}`}>
-                                      <div className="p-2 border-b border-slate-200 text-slate-500 font-bold text-xs flex justify-between items-center">
-                                          <span>BANCO (SUPLENTES)</span>
-                                          <span className="bg-slate-200 px-2 py-0.5 rounded text-[10px] text-slate-600">
-                                            {players.filter(p => matches.find(m => m.id === selectedMatchId)?.convokedIds.includes(p.id))
-                                            .filter(p => !matches.find(m => m.id === selectedMatchId)?.gameData?.starters.includes(p.id)).length} Jogadores
-                                          </span>
-                                      </div>
-                                      <div className="overflow-y-auto p-2 space-y-1">
-                                          {players
-                                            .filter(p => matches.find(m => m.id === selectedMatchId)?.convokedIds.includes(p.id))
-                                            .filter(p => !matches.find(m => m.id === selectedMatchId)?.gameData?.starters.includes(p.id))
-                                            .map(p => (
-                                                <div key={p.id} className={`flex justify-between bg-white border rounded items-center ${isLiveGameFullscreen ? 'p-3' : 'p-2'}`}>
-                                                    <span className={`text-slate-600 font-medium ${isLiveGameFullscreen ? 'text-base' : 'text-sm'}`}>
-                                                        <b className="text-slate-800 mr-1">{p.jerseyNumber}.</b> {p.name}
-                                                    </span>
-                                                    
-                                                    {/* Quick Sub IN Logic */}
-                                                    <div className="relative">
-                                                         <div className={`bg-emerald-50 text-emerald-700 border border-emerald-200 rounded-lg flex items-center justify-center font-bold active:bg-emerald-100 transition ${isLiveGameFullscreen ? 'px-4 py-2 text-sm' : 'px-3 py-1.5 text-xs'}`}>
-                                                            <ArrowRightLeft className={`mr-1.5 ${isLiveGameFullscreen ? 'w-4 h-4' : 'w-3 h-3'}`} /> Entrar
-                                                         </div>
-                                                        <select 
-                                                            className="absolute inset-0 opacity-0 w-full h-full cursor-pointer"
-                                                            onChange={(e) => {
-                                                                if (e.target.value) {
-                                                                    handleSubstitution(selectedMatchId, e.target.value, p.id);
-                                                                    e.target.value = ''; // Reset select
-                                                                }
-                                                            }}
-                                                            defaultValue=""
-                                                        >
-                                                            <option value="" disabled>Substituir quem...</option>
-                                                            {matches.find(m => m.id === selectedMatchId)?.gameData?.starters.map(starterId => {
-                                                                const starter = players.find(sp => sp.id === starterId);
-                                                                return <option key={starterId} value={starterId}>Sai: #{starter?.jerseyNumber} {starter?.name}</option>
-                                                            })}
-                                                        </select>
+                                                ))}
+                                                {players.filter(p => matches.find(m => m.id === selectedMatchId)?.convokedIds.includes(p.id) && !matches.find(m => m.id === selectedMatchId)?.gameData?.starters.includes(p.id)).length === 0 && (
+                                                    <div className="text-center p-8 text-slate-400 italic">
+                                                        Banco vazio.
                                                     </div>
-                                                </div>
-                                            ))}
-                                      </div>
-                                   </div>
+                                                )}
+                                          </div>
+                                       </div>
+                                  </div>
                               </div>
                           )}
 
