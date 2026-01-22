@@ -1,16 +1,18 @@
-import React, { useState, useEffect } from 'react';
-import { Player, Squad } from '../types';
-import { Save, X, Activity, User as UserIcon } from 'lucide-react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { Player, Squad, Match } from '../types';
+import { Save, X, Activity, User as UserIcon, BarChart3, Camera, Upload } from 'lucide-react';
 
 interface PlayerFormProps {
   player?: Player | null; // null means new player
   squads: Squad[];
+  matches?: Match[]; // Optional for new players
   onSave: (player: Player) => void;
   onCancel: () => void;
 }
 
-const PlayerForm: React.FC<PlayerFormProps> = ({ player, squads, onSave, onCancel }) => {
-  const [activeTab, setActiveTab] = useState<'INFO' | 'SPORTS'>('INFO');
+const PlayerForm: React.FC<PlayerFormProps> = ({ player, squads, matches = [], onSave, onCancel }) => {
+  const [activeTab, setActiveTab] = useState<'INFO' | 'SPORTS' | 'STATS'>('INFO');
+  const fileInputRef = useRef<HTMLInputElement>(null);
   
   const [formData, setFormData] = useState<Partial<Player>>({
     name: '',
@@ -22,6 +24,7 @@ const PlayerForm: React.FC<PlayerFormProps> = ({ player, squads, onSave, onCance
     kitSize: 'M',
     tracksuitSize: 'M',
     notes: '',
+    photoUrl: '',
     emergencyName: '',
     emergencyContact: '',
     sportsDetails: {
@@ -40,6 +43,54 @@ const PlayerForm: React.FC<PlayerFormProps> = ({ player, squads, onSave, onCance
       setFormData(player);
     }
   }, [player]);
+
+  // Calculate Statistics
+  const playerStats = useMemo(() => {
+    if (!player) return null;
+
+    let totalMatches = 0;
+    let totalConvocations = 0;
+    let totalStarts = 0;
+    let totalBenchStarts = 0;
+    let totalMinutes = 0;
+    
+    const matchHistory = matches
+        .filter(m => m.convokedIds.includes(player.id))
+        .sort((a,b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+        .map(m => {
+            const minutes = m.gameData?.playerMinutes?.[player.id] || 0;
+            const wasStarter = m.gameData?.startingXI 
+                ? m.gameData.startingXI.includes(player.id)
+                : m.gameData?.starters.includes(player.id);
+            
+            return {
+                id: m.id,
+                date: m.date,
+                opponent: m.opponent,
+                minutes,
+                wasStarter,
+                wasBench: !wasStarter
+            };
+        });
+
+    matchHistory.forEach(h => {
+        totalConvocations++;
+        if (h.wasStarter) totalStarts++;
+        else totalBenchStarts++;
+        totalMinutes += h.minutes;
+        if (h.minutes > 0) totalMatches++;
+    });
+
+    return {
+        totalMatches,
+        totalConvocations,
+        totalStarts,
+        totalBenchStarts,
+        totalMinutes,
+        history: matchHistory
+    };
+  }, [player, matches]);
+
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -71,6 +122,27 @@ const PlayerForm: React.FC<PlayerFormProps> = ({ player, squads, onSave, onCance
      }));
   }
 
+  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0];
+      if (file) {
+          // Simple size check (max 1MB to avoid localStorage issues)
+          if (file.size > 1024 * 1024) {
+              alert("A imagem é demasiado grande. Por favor escolha uma imagem menor que 1MB.");
+              return;
+          }
+
+          const reader = new FileReader();
+          reader.onloadend = () => {
+              setFormData(prev => ({ ...prev, photoUrl: reader.result as string }));
+          };
+          reader.readAsDataURL(file);
+      }
+  };
+
+  const triggerFileInput = () => {
+      fileInputRef.current?.click();
+  };
+
   const inputClasses = "w-full p-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 bg-white text-slate-900 placeholder-slate-400";
 
   return (
@@ -84,26 +156,63 @@ const PlayerForm: React.FC<PlayerFormProps> = ({ player, squads, onSave, onCance
         </button>
       </div>
 
-      <div className="flex border-b border-slate-200">
+      <div className="flex border-b border-slate-200 overflow-x-auto">
           <button 
             onClick={() => setActiveTab('INFO')}
-            className={`flex-1 py-3 text-sm font-medium flex items-center justify-center ${activeTab === 'INFO' ? 'border-b-2 border-emerald-500 text-emerald-600' : 'text-slate-500 hover:text-slate-700'}`}
+            className={`flex-1 min-w-[120px] py-3 text-sm font-medium flex items-center justify-center ${activeTab === 'INFO' ? 'border-b-2 border-emerald-500 text-emerald-600' : 'text-slate-500 hover:text-slate-700'}`}
           >
              <UserIcon className="w-4 h-4 mr-2" /> Dados Pessoais
           </button>
           <button 
             onClick={() => setActiveTab('SPORTS')}
-            className={`flex-1 py-3 text-sm font-medium flex items-center justify-center ${activeTab === 'SPORTS' ? 'border-b-2 border-emerald-500 text-emerald-600' : 'text-slate-500 hover:text-slate-700'}`}
+            className={`flex-1 min-w-[120px] py-3 text-sm font-medium flex items-center justify-center ${activeTab === 'SPORTS' ? 'border-b-2 border-emerald-500 text-emerald-600' : 'text-slate-500 hover:text-slate-700'}`}
           >
              <Activity className="w-4 h-4 mr-2" /> Ficha Desportiva
           </button>
+          {player && (
+             <button 
+                onClick={() => setActiveTab('STATS')}
+                className={`flex-1 min-w-[120px] py-3 text-sm font-medium flex items-center justify-center ${activeTab === 'STATS' ? 'border-b-2 border-emerald-500 text-emerald-600' : 'text-slate-500 hover:text-slate-700'}`}
+             >
+                <BarChart3 className="w-4 h-4 mr-2" /> Estatísticas
+             </button>
+          )}
       </div>
 
       <div className="overflow-y-auto p-6 flex-1">
       <form id="playerForm" onSubmit={handleSubmit} className="space-y-4">
         
         {activeTab === 'INFO' && (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          
+          {/* Photo Section */}
+          <div className="md:col-span-2 flex flex-col items-center justify-center mb-4">
+              <div 
+                className="w-32 h-32 rounded-full bg-slate-100 border-4 border-slate-200 flex items-center justify-center overflow-hidden relative cursor-pointer group"
+                onClick={triggerFileInput}
+              >
+                  {formData.photoUrl ? (
+                      <img src={formData.photoUrl} alt="Atleta" className="w-full h-full object-cover" />
+                  ) : (
+                      <UserIcon className="w-12 h-12 text-slate-300" />
+                  )}
+                  <div className="absolute inset-0 bg-black/40 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+                      <Camera className="w-8 h-8 text-white" />
+                  </div>
+              </div>
+              <input 
+                  type="file" 
+                  ref={fileInputRef} 
+                  className="hidden" 
+                  accept="image/*" 
+                  onChange={handleImageUpload}
+              />
+              <button type="button" onClick={triggerFileInput} className="mt-2 text-sm text-emerald-600 font-medium hover:text-emerald-700 flex items-center">
+                  <Upload className="w-4 h-4 mr-1" /> Carregar Foto
+              </button>
+              <p className="text-xs text-slate-400 mt-1">Clique para carregar ou tirar foto</p>
+          </div>
+
           {/* Personal Info */}
           <div className="space-y-4">
             <div>
@@ -237,6 +346,63 @@ const PlayerForm: React.FC<PlayerFormProps> = ({ player, squads, onSave, onCance
                         ))}
                      </div>
                  </div>
+            </div>
+        )}
+
+        {activeTab === 'STATS' && playerStats && (
+            <div className="space-y-6">
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                    <div className="bg-slate-50 p-4 rounded-lg border border-slate-100 text-center">
+                        <div className="text-3xl font-bold text-emerald-600">{playerStats.totalMinutes}</div>
+                        <div className="text-xs text-slate-500 uppercase font-semibold mt-1">Minutos Jogados</div>
+                    </div>
+                    <div className="bg-slate-50 p-4 rounded-lg border border-slate-100 text-center">
+                        <div className="text-3xl font-bold text-slate-700">{playerStats.totalConvocations}</div>
+                        <div className="text-xs text-slate-500 uppercase font-semibold mt-1">Convocatórias</div>
+                    </div>
+                    <div className="bg-slate-50 p-4 rounded-lg border border-slate-100 text-center">
+                        <div className="text-3xl font-bold text-slate-700">{playerStats.totalStarts}</div>
+                        <div className="text-xs text-slate-500 uppercase font-semibold mt-1">Titularidades</div>
+                    </div>
+                     <div className="bg-slate-50 p-4 rounded-lg border border-slate-100 text-center">
+                        <div className="text-3xl font-bold text-slate-700">{playerStats.totalBenchStarts}</div>
+                        <div className="text-xs text-slate-500 uppercase font-semibold mt-1">Começou no Banco</div>
+                    </div>
+                </div>
+
+                <div className="border rounded-lg overflow-hidden">
+                    <table className="w-full text-sm text-left">
+                        <thead className="bg-slate-100 text-slate-600 border-b">
+                            <tr>
+                                <th className="p-3">Data</th>
+                                <th className="p-3">Adversário</th>
+                                <th className="p-3">Condição</th>
+                                <th className="p-3 text-right">Minutos</th>
+                            </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                            {playerStats.history.map(h => (
+                                <tr key={h.id}>
+                                    <td className="p-3 text-slate-600">{h.date}</td>
+                                    <td className="p-3 font-medium text-slate-800">{h.opponent}</td>
+                                    <td className="p-3">
+                                        <span className={`px-2 py-0.5 rounded text-[10px] uppercase font-bold ${h.wasStarter ? 'bg-emerald-100 text-emerald-700' : 'bg-yellow-100 text-yellow-700'}`}>
+                                            {h.wasStarter ? 'Titular' : 'Banco'}
+                                        </span>
+                                    </td>
+                                    <td className="p-3 text-right font-mono font-bold text-slate-700">
+                                        {h.minutes}'
+                                    </td>
+                                </tr>
+                            ))}
+                            {playerStats.history.length === 0 && (
+                                <tr>
+                                    <td colSpan={4} className="p-4 text-center text-slate-400 italic">Sem histórico de jogos.</td>
+                                </tr>
+                            )}
+                        </tbody>
+                    </table>
+                </div>
             </div>
         )}
       </form>

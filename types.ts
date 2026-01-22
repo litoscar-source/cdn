@@ -60,7 +60,7 @@ export interface TrainingSession {
   date: string;
   time: string;
   description: string;
-  // Removed drills (AI)
+  notes?: string; // Added notes field
 }
 
 export interface AttendanceRecord {
@@ -80,8 +80,9 @@ export interface MatchEvent {
 }
 
 export interface MatchData {
-  starters: string[]; // IDs of players starting
-  substitutes: string[]; // IDs of players on bench (legacy, prefer dynamic calculation)
+  starters: string[]; // IDs of players CURRENTLY on the field
+  startingXI: string[]; // IDs of players who STARTED the game (Historical)
+  substitutes: string[]; // IDs of players on bench
   formation: string; // e.g., "4-3-3", "4-4-2"
   events: MatchEvent[];
   playerMinutes: Record<string, number>; // Map playerId -> minutes played

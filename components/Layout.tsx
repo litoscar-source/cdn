@@ -52,11 +52,6 @@ const Layout: React.FC<LayoutProps> = ({ user, currentView, onNavigate, onLogout
       {/* Sidebar (Desktop) */}
       <aside className="hidden md:flex flex-col w-64 bg-slate-900 border-r border-slate-800 text-white">
         <div className="p-6 border-b border-slate-800 flex items-center justify-center flex-col">
-          <img 
-            src={CLUB_LOGO_URL} 
-            alt={CLUB_NAME} 
-            className="w-24 h-24 object-contain mb-3 drop-shadow-lg"
-          />
           <h1 className="text-sm font-bold tracking-tight text-center leading-tight">{CLUB_NAME}</h1>
         </div>
 
@@ -101,11 +96,6 @@ const Layout: React.FC<LayoutProps> = ({ user, currentView, onNavigate, onLogout
         {/* Mobile Header */}
         <header className="md:hidden flex items-center justify-between p-4 bg-slate-900 text-white border-b border-slate-800 shadow-sm z-20">
           <div className="flex items-center">
-            <img 
-              src={CLUB_LOGO_URL} 
-              alt={CLUB_NAME} 
-              className="w-10 h-10 object-contain mr-3"
-            />
             <div>
                <h1 className="text-xs font-bold leading-tight">{CLUB_NAME}</h1>
             </div>

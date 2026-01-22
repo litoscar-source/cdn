@@ -3,18 +3,19 @@ import {
   User, Squad, Player, TrainingSession, AttendanceRecord, ViewState, UserRole, AttendanceStatus, Match, MatchData 
 } from './types';
 import { storageService } from './services/storageService';
-import { generateConvocationPDF } from './services/pdfService';
+import { generateConvocationPDF, generateMatchSheetPDF, generateTrainingSessionPDF } from './services/pdfService';
 import { CLUB_NAME, CLUB_LOGO_URL } from './constants';
 import Layout from './components/Layout';
 import PlayerForm from './components/PlayerForm';
 import { 
-  Plus, Search, Filter, Trash2, Edit2, Check, X as XIcon, AlertCircle, Clock, Save, UserPlus, Users, UserCircle, CalendarDays, KeyRound, Flag, Copy, FileDown, Loader2, Play, Pause, Square, Shirt, Shield, ArrowRightLeft, FileText, Move, Maximize2, Minimize2, UserMinus, UserCheck
+  Plus, Search, Filter, Trash2, Edit2, Check, X as XIcon, AlertCircle, Clock, Save, UserPlus, Users, UserCircle, CalendarDays, KeyRound, Flag, Copy, FileDown, Loader2, Play, Pause, Square, Shirt, Shield, ArrowRightLeft, FileText, Move, Maximize2, Minimize2, UserMinus, UserCheck, Printer, RefreshCcw
 } from 'lucide-react';
 
 const App: React.FC = () => {
   // Global State
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [currentView, setCurrentView] = useState<ViewState>('DASHBOARD');
+  const [isLoading, setIsLoading] = useState(false);
   
   // Data State
   const [users, setUsers] = useState<User[]>([]);
@@ -27,6 +28,8 @@ const App: React.FC = () => {
   // UI State
   const [isLoginView, setIsLoginView] = useState(true);
   const [selectedLoginUserId, setSelectedLoginUserId] = useState('');
+  const [loginPassword, setLoginPassword] = useState(''); 
+  const [loginError, setLoginError] = useState('');
 
   const [editingPlayer, setEditingPlayer] = useState<Player | null | undefined>(undefined); 
   const [selectedSquadFilter, setSelectedSquadFilter] = useState<string>('all');
@@ -48,6 +51,7 @@ const App: React.FC = () => {
   // Tactics Selection State
   const [selectedTacticsPlayerId, setSelectedTacticsPlayerId] = useState<string | null>(null);
   const [isTacticsFullscreen, setIsTacticsFullscreen] = useState(false);
+  const [isLiveGameFullscreen, setIsLiveGameFullscreen] = useState(false);
   const [draggingPlayerId, setDraggingPlayerId] = useState<string | null>(null);
   const fieldRef = useRef<HTMLDivElement>(null);
 
@@ -76,11 +80,14 @@ const App: React.FC = () => {
                              
                              // Update Minutes Played every 60s
                              const newPlayerMinutes = { ...m.gameData.playerMinutes };
-                             if (newTimer % 60 === 0) {
+                             
+                             // We update minute count every 60 seconds of game time
+                             if (newTimer > 0 && newTimer % 60 === 0) {
                                  m.gameData.starters.forEach(pid => {
                                      newPlayerMinutes[pid] = (newPlayerMinutes[pid] || 0) + 1;
                                  });
                              }
+                             
                              return {
                                  ...m,
                                  gameData: {
@@ -104,37 +111,89 @@ const App: React.FC = () => {
     }
   }, [selectedMatchId, matches]);
 
-  // Initial Load
+  // Initial Load & Admin Check
   useEffect(() => {
-    const user = storageService.getCurrentUser();
-    const storedUsers = storageService.getUsers();
-    setUsers(storedUsers);
+    const init = async () => {
+        setIsLoading(true);
+        // We need to fetch users to display the login dropdown
+        let loadedUsers = await storageService.getUsers();
+        
+        // --- SEED DEFAULT ADMIN IF NO USERS EXIST ---
+        if (loadedUsers.length === 0) {
+            const defaultAdmin: User = {
+                id: crypto.randomUUID(),
+                name: 'Administrador',
+                username: 'admin',
+                role: UserRole.ADMIN,
+                password: '123',
+                allowedSquads: []
+            };
+            await storageService.saveUsers([defaultAdmin]);
+            loadedUsers = [defaultAdmin];
+        }
 
-    if (user) {
-      setCurrentUser(user);
-      setIsLoginView(false);
-      loadData();
-    }
+        setUsers(loadedUsers);
+        
+        const user = storageService.getCurrentUser();
+        if (user) {
+          // Verify if user still exists in DB (security check)
+          const validUser = loadedUsers.find(u => u.id === user.id);
+          if (validUser) {
+              setCurrentUser(validUser); // Update with fresh data (e.g. if role changed)
+              setIsLoginView(false);
+              await loadData();
+          } else {
+              storageService.logout();
+              setIsLoginView(true);
+          }
+        }
+        setIsLoading(false);
+    };
+    init();
   }, []);
 
-  const loadData = () => {
-    setUsers(storageService.getUsers());
-    setSquads(storageService.getSquads());
-    setPlayers(storageService.getPlayers());
-    setSessions(storageService.getSessions());
-    setAttendance(storageService.getAttendance());
-    setMatches(storageService.getMatches());
+  const loadData = async () => {
+    // Parallel fetching for performance
+    const [u, s, p, sess, att, m] = await Promise.all([
+        storageService.getUsers(),
+        storageService.getSquads(),
+        storageService.getPlayers(),
+        storageService.getSessions(),
+        storageService.getAttendance(),
+        storageService.getMatches()
+    ]);
+    
+    setUsers(u);
+    setSquads(s);
+    setPlayers(p);
+    setSessions(sess);
+    setAttendance(att);
+    setMatches(m);
   };
 
-  const handleLogin = (e: React.FormEvent) => {
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
+    setLoginError('');
     if(!selectedLoginUserId) return;
-    const user = users.find(u => u.id === selectedLoginUserId);
+    
+    // Always re-fetch users on login attempt to ensure we have latest passwords
+    const latestUsers = await storageService.getUsers();
+    setUsers(latestUsers);
+    
+    const user = latestUsers.find(u => u.id === selectedLoginUserId);
     if (user) {
-      storageService.login(user.username, user.password || ''); 
-      setCurrentUser(user);
-      setIsLoginView(false);
-      loadData();
+        // Strict Password Check
+        if (user.password !== loginPassword) {
+            setLoginError('Password incorreta.');
+            return;
+        }
+
+        storageService.persistLogin(user);
+        setCurrentUser(user);
+        setIsLoading(true);
+        await loadData();
+        setIsLoading(false);
+        setIsLoginView(false);
     }
   };
 
@@ -143,6 +202,8 @@ const App: React.FC = () => {
     setCurrentUser(null);
     setIsLoginView(true);
     setSelectedLoginUserId('');
+    setLoginPassword('');
+    setLoginError('');
   };
 
   // --- Helper: Visible Squads for Current User ---
@@ -159,23 +220,23 @@ const App: React.FC = () => {
   }, [players, visibleSquads]);
 
   // --- Logic for Players ---
-  const savePlayer = (player: Player) => {
+  const savePlayer = async (player: Player) => {
     let updatedPlayers;
     if (players.find(p => p.id === player.id)) {
       updatedPlayers = players.map(p => p.id === player.id ? player : p);
     } else {
       updatedPlayers = [...players, player];
     }
-    setPlayers(updatedPlayers);
-    storageService.savePlayers(updatedPlayers);
+    setPlayers(updatedPlayers); // Optimistic Update
     setEditingPlayer(undefined);
+    await storageService.savePlayers([player]); // Save to DB
   };
 
-  const deletePlayer = (id: string) => {
+  const deletePlayer = async (id: string) => {
     if (confirm("Tem a certeza que deseja eliminar este atleta?")) {
       const updated = players.filter(p => p.id !== id);
-      setPlayers(updated);
-      storageService.savePlayers(updated);
+      setPlayers(updated); // Optimistic
+      await storageService.deletePlayer(id); // DB
     }
   };
 
@@ -220,44 +281,57 @@ const App: React.FC = () => {
       setIsSessionModalOpen(true);
   }
 
-  const saveSession = () => {
+  const saveSession = async () => {
     if (!editingSession.date || !editingSession.squadId) return;
     
+    let sessionToSave: TrainingSession;
     let updatedSessions = [...sessions];
+
     if (editingSession.id) {
         // Edit
-        updatedSessions = updatedSessions.map(s => s.id === editingSession.id ? { ...s, ...editingSession } as TrainingSession : s);
+        sessionToSave = { ...editingSession } as TrainingSession;
+        updatedSessions = updatedSessions.map(s => s.id === editingSession.id ? sessionToSave : s);
     } else {
         // Create
-        const session: TrainingSession = {
+        sessionToSave = {
             id: crypto.randomUUID(),
             date: editingSession.date!,
             squadId: editingSession.squadId!,
             time: editingSession.time || '19:00',
-            description: editingSession.description || 'Treino'
+            description: editingSession.description || 'Treino',
+            notes: editingSession.notes || ''
         };
-        updatedSessions.push(session);
+        updatedSessions.push(sessionToSave);
     }
-    setSessions(updatedSessions);
-    storageService.saveSessions(updatedSessions);
+    
+    setSessions(updatedSessions); // Optimistic
     setIsSessionModalOpen(false);
     setEditingSession({});
+    await storageService.saveSessions([sessionToSave]); // DB
   };
 
-  const toggleAttendance = (playerId: string, sessionId: string, status: AttendanceStatus) => {
+  const toggleAttendance = async (playerId: string, sessionId: string, status: AttendanceStatus) => {
     const existingIndex = attendance.findIndex(a => a.playerId === playerId && a.sessionId === sessionId);
     let newAttendance = [...attendance];
+    let recordToSave: AttendanceRecord;
+
     if (existingIndex >= 0) {
       if (newAttendance[existingIndex].status === status) {
-        newAttendance.splice(existingIndex, 1); 
+        // Toggle OFF - Remove
+        await storageService.deleteAttendance(playerId, sessionId);
+        newAttendance.splice(existingIndex, 1);
+        setAttendance(newAttendance);
+        return;
       } else {
         newAttendance[existingIndex].status = status;
+        recordToSave = newAttendance[existingIndex];
       }
     } else {
-      newAttendance.push({ id: crypto.randomUUID(), playerId, sessionId, status });
+      recordToSave = { id: crypto.randomUUID(), playerId, sessionId, status };
+      newAttendance.push(recordToSave);
     }
     setAttendance(newAttendance);
-    storageService.saveAttendance(newAttendance);
+    await storageService.saveAttendance([recordToSave]);
   };
 
   const getAttendanceStatus = (playerId: string, sessionId: string | null) => {
@@ -265,6 +339,20 @@ const App: React.FC = () => {
     const record = attendance.find(a => a.playerId === playerId && a.sessionId === sessionId);
     return record?.status;
   };
+
+  const downloadTrainingPDF = async (sessionId: string) => {
+    const session = sessions.find(s => s.id === sessionId);
+    if(!session) return;
+    const squad = squads.find(s => s.id === session.squadId);
+    if(!squad) return;
+
+    try {
+        await generateTrainingSessionPDF(session, squad, players, attendance);
+    } catch(e) {
+        console.error(e);
+        alert("Erro ao gerar PDF.");
+    }
+  }
 
   // --- Logic for Matches (Convocatórias & Game Day) ---
   const openMatchModal = (match?: Match) => {
@@ -277,14 +365,17 @@ const App: React.FC = () => {
       setIsMatchModalOpen(true);
   }
 
-  const saveMatch = () => {
+  const saveMatch = async () => {
     if (!editingMatch.date || !editingMatch.squadId || !editingMatch.opponent) return;
 
+    let matchToSave: Match;
     let updatedMatches = [...matches];
+    
     if (editingMatch.id) {
-        updatedMatches = updatedMatches.map(m => m.id === editingMatch.id ? { ...m, ...editingMatch } as Match : m);
+        matchToSave = { ...editingMatch } as Match;
+        updatedMatches = updatedMatches.map(m => m.id === editingMatch.id ? matchToSave : m);
     } else {
-        const match: Match = {
+        matchToSave = {
             id: crypto.randomUUID(),
             squadId: editingMatch.squadId!,
             date: editingMatch.date!,
@@ -296,19 +387,21 @@ const App: React.FC = () => {
             playerKit: editingMatch.playerKit,
             goalkeeperKit: editingMatch.goalkeeperKit
         };
-        updatedMatches.push(match);
+        updatedMatches.push(matchToSave);
     }
     setMatches(updatedMatches);
-    storageService.saveMatches(updatedMatches);
     setIsMatchModalOpen(false);
     setEditingMatch({});
+    await storageService.saveMatches([matchToSave]);
   };
 
-  const updateMatchGameData = (matchId: string, data: Partial<MatchData>) => {
+  const updateMatchGameData = async (matchId: string, data: Partial<MatchData>) => {
+      let matchToUpdate: Match | undefined;
       const updatedMatches = matches.map(m => {
           if (m.id === matchId) {
               const prevData = m.gameData || {
                   starters: [],
+                  startingXI: [],
                   substitutes: [],
                   formation: '4-3-3',
                   events: [],
@@ -318,36 +411,43 @@ const App: React.FC = () => {
                   timer: 0,
                   isTimerRunning: false
               };
-              return { ...m, gameData: { ...prevData, ...data } };
+              matchToUpdate = { ...m, gameData: { ...prevData, ...data } };
+              return matchToUpdate;
           }
           return m;
       });
       setMatches(updatedMatches);
-      storageService.saveMatches(updatedMatches);
+      if(matchToUpdate) await storageService.saveMatches([matchToUpdate]);
   };
 
-  const toggleConvocation = (matchId: string, playerId: string) => {
+  const toggleConvocation = async (matchId: string, playerId: string) => {
     const match = matches.find(m => m.id === matchId);
     if (!match) return;
 
     let newConvoked = [...match.convokedIds];
+    let updatedGameData = match.gameData;
+
     if (newConvoked.includes(playerId)) {
       // Remove
       newConvoked = newConvoked.filter(id => id !== playerId);
       if (match.gameData) {
-          updateMatchGameData(matchId, {
+          updatedGameData = {
+              ...match.gameData,
               starters: match.gameData.starters.filter(id => id !== playerId),
+              startingXI: (match.gameData.startingXI || []).filter(id => id !== playerId),
               substitutes: match.gameData.substitutes.filter(id => id !== playerId)
-          });
+          };
       }
     } else {
       // Add
       newConvoked.push(playerId);
     }
 
-    const updatedMatches = matches.map(m => m.id === matchId ? { ...m, convokedIds: newConvoked } : m);
+    const updatedMatch = { ...match, convokedIds: newConvoked, gameData: updatedGameData };
+    const updatedMatches = matches.map(m => m.id === matchId ? updatedMatch : m);
+    
     setMatches(updatedMatches);
-    storageService.saveMatches(updatedMatches);
+    await storageService.saveMatches([updatedMatch]);
   };
 
   // Helper to toggle starter status directly from list
@@ -357,17 +457,24 @@ const App: React.FC = () => {
       if(!match) return;
 
       const currentStarters = match.gameData?.starters || [];
+      const currentStartingXI = match.gameData?.startingXI || [];
+      
       let newStarters = [...currentStarters];
+      let newStartingXI = [...currentStartingXI];
 
       if (newStarters.includes(playerId)) {
           // Move to Bench
           newStarters = newStarters.filter(id => id !== playerId);
+          // Also remove from historical starting XI if we are still in setup phase (not live)
+          // For simplicity, we always sync them in this view
+          newStartingXI = newStartingXI.filter(id => id !== playerId);
       } else {
           // Move to Starters
           newStarters.push(playerId);
+          if (!newStartingXI.includes(playerId)) newStartingXI.push(playerId);
       }
 
-      updateMatchGameData(matchId, { starters: newStarters });
+      updateMatchGameData(matchId, { starters: newStarters, startingXI: newStartingXI });
   };
 
   // --- TACTICS BOARD LOGIC (DRAG & DROP) ---
@@ -378,8 +485,11 @@ const App: React.FC = () => {
       // Ensure player is in starters if not already
       const match = matches.find(m => m.id === selectedMatchId);
       if (match && !match.gameData?.starters.includes(playerId)) {
+          const newStarters = [...(match.gameData?.starters || []), playerId];
+          const newStartingXI = [...(match.gameData?.startingXI || []), playerId];
           updateMatchGameData(match.id, {
-              starters: [...(match.gameData?.starters || []), playerId]
+              starters: newStarters,
+              startingXI: newStartingXI
           });
       }
   };
@@ -418,9 +528,15 @@ const App: React.FC = () => {
           const currentStarters = match.gameData?.starters || [];
           let newStarters = [...currentStarters];
           if(!newStarters.includes(selectedTacticsPlayerId)) newStarters.push(selectedTacticsPlayerId);
+          
+          // Sync Starting XI
+          const currentStartingXI = match.gameData?.startingXI || [];
+          let newStartingXI = [...currentStartingXI];
+          if(!newStartingXI.includes(selectedTacticsPlayerId)) newStartingXI.push(selectedTacticsPlayerId);
 
           updateMatchGameData(selectedMatchId, {
               starters: newStarters,
+              startingXI: newStartingXI,
               playerPositions: { ...(match.gameData?.playerPositions || {}), [selectedTacticsPlayerId]: { x, y } }
           });
           setSelectedTacticsPlayerId(null);
@@ -433,7 +549,9 @@ const App: React.FC = () => {
       if(!match) return;
       
       const newStarters = (match.gameData?.starters || []).filter(id => id !== playerId);
-      updateMatchGameData(selectedMatchId, { starters: newStarters });
+      const newStartingXI = (match.gameData?.startingXI || []).filter(id => id !== playerId);
+      
+      updateMatchGameData(selectedMatchId, { starters: newStarters, startingXI: newStartingXI });
   };
 
   // --- LIVE GAME LOGIC ---
@@ -456,7 +574,7 @@ const App: React.FC = () => {
 
   const setGamePeriod = (matchId: string, period: MatchData['currentPeriod']) => {
       const match = matches.find(m => m.id === matchId);
-      // Explicitly Reset timer to 0 when changing period as requested
+      // Reset timer to 0 when changing period
       updateMatchGameData(matchId, { currentPeriod: period, isTimerRunning: false, timer: 0 });
   };
   
@@ -488,6 +606,17 @@ const App: React.FC = () => {
     }
   };
 
+  const downloadMatchSheetPDF = async (matchId: string) => {
+      const match = matches.find(m => m.id === matchId);
+      if (!match) return;
+      const squad = squads.find(s => s.id === match.squadId);
+      if (squad) {
+          try {
+              await generateMatchSheetPDF(match, squad, players);
+          } catch(e) { console.error(e); alert("Erro ao gerar Ficha de Jogo."); }
+      }
+  }
+
   const copyConvocation = (matchId: string) => {
     const match = matches.find(m => m.id === matchId);
     if (!match) return;
@@ -509,24 +638,44 @@ const App: React.FC = () => {
   };
 
   // --- Logic for Admin ---
-  const [newUser, setNewUser] = useState<Partial<User>>({ role: UserRole.STAFF, name: '', username: '', allowedSquads: [] });
+  const [newUser, setNewUser] = useState<Partial<User>>({ role: UserRole.STAFF, name: '', username: '', password: '', allowedSquads: [] });
   const [newSquadName, setNewSquadName] = useState('');
 
-  const addUser = () => {
-    if (!newUser.name || !newUser.username) return;
+  const saveUser = async () => {
+    if (!newUser.name || !newUser.username || !newUser.password) {
+        alert("Por favor preencha nome, username e password.");
+        return;
+    }
+    
     const u: User = {
-      id: crypto.randomUUID(),
+      id: newUser.id || crypto.randomUUID(), // Update existing or create new
       name: newUser.name!,
       username: newUser.username!,
       role: newUser.role || UserRole.STAFF,
-      password: '123',
+      password: newUser.password!, // In real app, never save plain text
       allowedSquads: newUser.allowedSquads
     };
-    const updated = [...users, u];
-    setUsers(updated);
-    storageService.saveUsers(updated);
-    setNewUser({ role: UserRole.STAFF, name: '', username: '', allowedSquads: [] });
+    
+    // If updating, replace in array, else append
+    let updatedUsers = [...users];
+    if (newUser.id) {
+        updatedUsers = updatedUsers.map(user => user.id === newUser.id ? u : user);
+    } else {
+        updatedUsers.push(u);
+    }
+    
+    setUsers(updatedUsers);
+    setNewUser({ role: UserRole.STAFF, name: '', username: '', password: '', allowedSquads: [] });
+    await storageService.saveUsers([u]);
   };
+
+  const startEditUser = (user: User) => {
+      setNewUser({ ...user });
+  }
+
+  const cancelEditUser = () => {
+      setNewUser({ role: UserRole.STAFF, name: '', username: '', password: '', allowedSquads: [] });
+  }
 
   const handleUserSquadChange = (squadId: string) => {
     setNewUser(prev => {
@@ -539,28 +688,28 @@ const App: React.FC = () => {
     });
   };
   
-  const deleteUser = (id: string) => {
+  const deleteUser = async (id: string) => {
       if(confirm('Eliminar utilizador?')) {
           const updated = users.filter(u => u.id !== id);
           setUsers(updated);
-          storageService.saveUsers(updated);
+          await storageService.deleteUser(id);
       }
   }
 
-  const addSquad = () => {
+  const addSquad = async () => {
     if(!newSquadName) return;
     const s: Squad = { id: crypto.randomUUID(), name: newSquadName };
     const updated = [...squads, s];
     setSquads(updated);
-    storageService.saveSquads(updated);
     setNewSquadName('');
+    await storageService.saveSquads([s]);
   }
   
-  const deleteSquad = (id: string) => {
+  const deleteSquad = async (id: string) => {
       if(confirm('Eliminar escalão? Todos os dados associados serão perdidos visualmente.')) {
           const updated = squads.filter(s => s.id !== id);
           setSquads(updated);
-          storageService.saveSquads(updated);
+          await storageService.deleteSquad(id);
       }
   }
 
@@ -574,13 +723,6 @@ const App: React.FC = () => {
     return (
       <div className="min-h-screen bg-slate-900 flex items-center justify-center p-4">
         <div className="bg-white rounded-2xl p-8 max-w-md w-full shadow-2xl">
-          <div className="flex justify-center mb-6">
-             <img 
-               src={CLUB_LOGO_URL} 
-               alt={CLUB_NAME} 
-               className="h-32 w-auto object-contain drop-shadow-md"
-             />
-          </div>
           <h1 className="text-xl font-bold text-center text-slate-800 mb-8">{CLUB_NAME}</h1>
           <form onSubmit={handleLogin} className="space-y-4">
             <div>
@@ -588,7 +730,10 @@ const App: React.FC = () => {
               <select 
                 className={loginInputClass}
                 value={selectedLoginUserId}
-                onChange={(e) => setSelectedLoginUserId(e.target.value)}
+                onChange={(e) => {
+                    setSelectedLoginUserId(e.target.value);
+                    setLoginError('');
+                }}
               >
                 <option value="">Selecione...</option>
                 {users.map(u => (
@@ -596,9 +741,26 @@ const App: React.FC = () => {
                 ))}
               </select>
             </div>
+
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">Password</label>
+              <input 
+                type="password"
+                className={loginInputClass}
+                value={loginPassword}
+                onChange={(e) => setLoginPassword(e.target.value)}
+                placeholder="Introduza a sua password"
+              />
+            </div>
+
+            {loginError && (
+                <div className="p-3 bg-red-50 text-red-600 text-sm rounded-lg flex items-center">
+                    <AlertCircle className="w-4 h-4 mr-2" /> {loginError}
+                </div>
+            )}
             
-            <button className="w-full py-3 bg-emerald-600 text-white font-bold rounded-lg hover:bg-emerald-700 transition shadow-lg mt-4">
-              Entrar
+            <button className="w-full py-3 bg-emerald-600 text-white font-bold rounded-lg hover:bg-emerald-700 transition shadow-lg mt-4 flex justify-center items-center">
+              {isLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : 'Entrar'}
             </button>
           </form>
         </div>
@@ -658,7 +820,8 @@ const App: React.FC = () => {
               player={editingPlayer} 
               squads={visibleSquads} 
               onSave={savePlayer} 
-              onCancel={() => setEditingPlayer(undefined)} 
+              onCancel={() => setEditingPlayer(undefined)}
+              matches={matches}
             />
           ) : (
             <div className="space-y-6">
@@ -711,9 +874,16 @@ const App: React.FC = () => {
                       {filteredPlayers.map(player => (
                         <tr key={player.id} className="hover:bg-slate-50 transition">
                            <td className="p-4 text-slate-500 font-mono">{player.jerseyNumber}</td>
-                          <td className="p-4">
-                            <div className="font-medium text-slate-900">{player.name}</div>
-                            <div className="text-xs text-slate-500 md:hidden">{squads.find(s => s.id === player.squadId)?.name}</div>
+                          <td className="p-4 flex items-center">
+                            {player.photoUrl ? (
+                                <img src={player.photoUrl} alt="" className="w-8 h-8 rounded-full object-cover mr-3 border border-slate-200" />
+                            ) : (
+                                <div className="w-8 h-8 rounded-full bg-slate-200 flex items-center justify-center mr-3 text-slate-500"><UserCircle className="w-5 h-5"/></div>
+                            )}
+                            <div>
+                                <div className="font-medium text-slate-900">{player.name}</div>
+                                <div className="text-xs text-slate-500 md:hidden">{squads.find(s => s.id === player.squadId)?.name}</div>
+                            </div>
                           </td>
                           <td className="p-4 text-slate-700 font-medium">
                             {calculateAge(player.birthDate)}
@@ -772,7 +942,7 @@ const App: React.FC = () => {
                          <input placeholder="Kit Jogador" className={inputClass} value={editingMatch.playerKit || ''} onChange={e => setEditingMatch({...editingMatch, playerKit: e.target.value})} />
                          <input placeholder="Kit GR" className={inputClass} value={editingMatch.goalkeeperKit || ''} onChange={e => setEditingMatch({...editingMatch, goalkeeperKit: e.target.value})} />
                      </div>
-                     <textarea placeholder="Notas..." className={inputClass} value={editingMatch.notes || ''} onChange={e => setEditingMatch({...editingMatch, notes: e.target.value})} />
+                     <textarea placeholder="Notas / Observações de jogo..." className={inputClass} value={editingMatch.notes || ''} onChange={e => setEditingMatch({...editingMatch, notes: e.target.value})} rows={3} />
                      <select className={inputClass} value={editingMatch.location} onChange={e => setEditingMatch({...editingMatch, location: e.target.value as any})}>
                        <option value="Casa">Casa</option>
                        <option value="Fora">Fora</option>
@@ -843,7 +1013,7 @@ const App: React.FC = () => {
                                 onClick={() => setActiveGameTab('TACTICS')}
                                 className={`px-3 py-1.5 rounded-lg text-sm font-medium transition whitespace-nowrap ${activeGameTab === 'TACTICS' ? 'bg-emerald-600 text-white' : 'text-slate-600 hover:bg-slate-200'}`}
                              >
-                                 Titulares (Quadro)
+                                 Titulares
                              </button>
                              <button 
                                 onClick={() => setActiveGameTab('LIVE')}
@@ -853,8 +1023,9 @@ const App: React.FC = () => {
                              </button>
                          </div>
                         <div className="flex space-x-2">
-                           <button onClick={() => copyConvocation(selectedMatchId)} className="p-2 text-slate-500 hover:bg-slate-200 rounded"><Copy className="w-4 h-4"/></button>
-                           <button onClick={() => downloadConvocationPDF(selectedMatchId)} className="p-2 text-emerald-600 hover:bg-emerald-100 rounded">
+                           <button onClick={() => downloadMatchSheetPDF(selectedMatchId)} title="Ficha de Jogo" className="p-2 text-slate-500 hover:bg-slate-200 rounded"><Printer className="w-4 h-4"/></button>
+                           <button onClick={() => copyConvocation(selectedMatchId)} title="Copiar Convocatória" className="p-2 text-slate-500 hover:bg-slate-200 rounded"><Copy className="w-4 h-4"/></button>
+                           <button onClick={() => downloadConvocationPDF(selectedMatchId)} title="PDF Convocatória" className="p-2 text-emerald-600 hover:bg-emerald-100 rounded">
                                {isGeneratingPdf ? <Loader2 className="w-4 h-4 animate-spin"/> : <FileDown className="w-4 h-4"/>}
                            </button>
                         </div>
@@ -1006,11 +1177,11 @@ const App: React.FC = () => {
                               </div>
                           )}
 
-                          {/* LIVE GAME TAB */}
+                          {/* LIVE GAME TAB (FULLSCREEN OPTIMIZED) */}
                           {activeGameTab === 'LIVE' && matches.find(m => m.id === selectedMatchId) && (
-                              <div className="flex flex-col h-full space-y-4">
+                              <div className={`flex flex-col h-full space-y-4 ${isLiveGameFullscreen ? 'fixed inset-0 z-50 bg-slate-100 p-2 md:p-4' : ''}`}>
                                   {/* Scoreboard / Timer */}
-                                  <div className="bg-slate-900 text-white p-4 rounded-xl shadow-lg flex justify-between items-center">
+                                  <div className="bg-slate-900 text-white p-4 rounded-xl shadow-lg flex justify-between items-center shrink-0">
                                       <div>
                                           <div className="text-xs text-slate-400 uppercase flex items-center gap-2">
                                               Tempo de Jogo
@@ -1020,37 +1191,42 @@ const App: React.FC = () => {
                                               }
                                           </div>
                                           <div className="flex items-center gap-4">
-                                              <div className="text-4xl font-mono font-bold tracking-wider text-emerald-400">
+                                              <div className={`font-mono font-bold tracking-wider text-emerald-400 ${isLiveGameFullscreen ? 'text-5xl' : 'text-4xl'}`}>
                                                   {formatTime(matches.find(m => m.id === selectedMatchId)?.gameData?.timer || 0)}
                                               </div>
                                               <button 
                                                 onClick={() => toggleTimer(selectedMatchId!)}
-                                                className={`p-2 rounded-full border ${matches.find(m => m.id === selectedMatchId)?.gameData?.isTimerRunning ? 'bg-yellow-500/20 border-yellow-500 text-yellow-500' : 'bg-emerald-500/20 border-emerald-500 text-emerald-500'}`}
+                                                className={`rounded-full border flex items-center justify-center transition active:scale-95 ${isLiveGameFullscreen ? 'w-16 h-16' : 'p-2'} ${matches.find(m => m.id === selectedMatchId)?.gameData?.isTimerRunning ? 'bg-yellow-500/20 border-yellow-500 text-yellow-500' : 'bg-emerald-500/20 border-emerald-500 text-emerald-500'}`}
                                               >
-                                                  {matches.find(m => m.id === selectedMatchId)?.gameData?.isTimerRunning ? <Pause className="w-5 h-5" /> : <Play className="w-5 h-5" />}
+                                                  {matches.find(m => m.id === selectedMatchId)?.gameData?.isTimerRunning ? <Pause className={`${isLiveGameFullscreen ? 'w-8 h-8' : 'w-5 h-5'}`} /> : <Play className={`${isLiveGameFullscreen ? 'w-8 h-8' : 'w-5 h-5'}`} />}
                                               </button>
                                           </div>
                                       </div>
                                       
-                                      <div className="flex space-x-2">
-                                          {['1H', 'HT', '2H', 'FT'].map((p) => {
-                                              const current = matches.find(m => m.id === selectedMatchId)?.gameData?.currentPeriod;
-                                              return (
-                                                  <button 
-                                                    key={p}
-                                                    onClick={() => setGamePeriod(selectedMatchId, p as any)}
-                                                    className={`px-3 py-1 rounded text-xs font-bold transition ${current === p ? 'bg-emerald-500 text-white' : 'bg-slate-800 text-slate-500 hover:bg-slate-700'}`}
-                                                  >
-                                                      {p === '1H' ? '1ª P' : p === 'HT' ? 'INT' : p === '2H' ? '2ª P' : 'FIM'}
-                                                  </button>
-                                              )
-                                          })}
+                                      <div className="flex flex-col items-end space-y-2">
+                                          <button onClick={() => setIsLiveGameFullscreen(!isLiveGameFullscreen)} className="text-slate-400 hover:text-white mb-2">
+                                              {isLiveGameFullscreen ? <Minimize2 className="w-6 h-6"/> : <Maximize2 className="w-6 h-6"/>}
+                                          </button>
+                                          <div className="flex space-x-1">
+                                              {['1H', 'HT', '2H', 'FT'].map((p) => {
+                                                  const current = matches.find(m => m.id === selectedMatchId)?.gameData?.currentPeriod;
+                                                  return (
+                                                      <button 
+                                                        key={p}
+                                                        onClick={() => setGamePeriod(selectedMatchId, p as any)}
+                                                        className={`px-3 py-2 rounded text-xs font-bold transition ${current === p ? 'bg-emerald-500 text-white' : 'bg-slate-800 text-slate-500 hover:bg-slate-700'}`}
+                                                      >
+                                                          {p === '1H' ? '1ª' : p === 'HT' ? 'INT' : p === '2H' ? '2ª' : 'FIM'}
+                                                      </button>
+                                                  )
+                                              })}
+                                          </div>
                                       </div>
                                   </div>
 
                                   {/* Active Players (Starters) - Minute Tracking */}
-                                  <div className="flex-1 bg-white rounded-xl border border-slate-200 overflow-hidden flex flex-col">
-                                      <div className="p-3 border-b border-slate-100 bg-emerald-50 text-emerald-800 font-bold text-sm flex justify-between">
+                                  <div className="flex-1 bg-white rounded-xl border border-slate-200 overflow-hidden flex flex-col shadow-sm">
+                                      <div className="p-3 border-b border-slate-100 bg-emerald-50 text-emerald-800 font-bold text-sm flex justify-between shrink-0">
                                           <span>Em Campo (Titulares)</span>
                                           <span>Minutos</span>
                                       </div>
@@ -1058,36 +1234,41 @@ const App: React.FC = () => {
                                          {players
                                             .filter(p => matches.find(m => m.id === selectedMatchId)?.gameData?.starters.includes(p.id))
                                             .map(p => (
-                                                <div key={p.id} className="flex justify-between items-center p-2 border rounded-lg bg-white shadow-sm">
+                                                <div key={p.id} className={`flex justify-between items-center border rounded-lg bg-white shadow-sm ${isLiveGameFullscreen ? 'p-4' : 'p-2'}`}>
                                                     <div className="flex items-center">
-                                                        <span className="w-6 h-6 rounded-full bg-slate-200 text-slate-600 flex items-center justify-center text-xs font-bold mr-2">{p.jerseyNumber}</span>
-                                                        <span className="font-medium text-slate-800">{p.name}</span>
+                                                        <span className={`rounded-full bg-slate-200 text-slate-600 flex items-center justify-center font-bold mr-3 ${isLiveGameFullscreen ? 'w-10 h-10 text-lg' : 'w-6 h-6 text-xs'}`}>{p.jerseyNumber}</span>
+                                                        <span className={`font-medium text-slate-800 ${isLiveGameFullscreen ? 'text-lg' : 'text-base'}`}>{p.name}</span>
                                                     </div>
-                                                    <div className="flex items-center space-x-3">
-                                                        <span className="font-mono text-lg font-bold text-slate-700">
+                                                    <div className="flex items-center space-x-4">
+                                                        <span className={`font-mono font-bold text-slate-700 ${isLiveGameFullscreen ? 'text-2xl' : 'text-lg'}`}>
                                                             {matches.find(m => m.id === selectedMatchId)?.gameData?.playerMinutes?.[p.id] || 0}'
                                                         </span>
-                                                        {/* Sub OUT Button */}
-                                                        <select 
-                                                            className="text-xs bg-red-50 text-red-700 border border-red-200 rounded p-1 max-w-[80px]"
-                                                            onChange={(e) => {
-                                                                if (e.target.value) {
-                                                                    handleSubstitution(selectedMatchId, p.id, e.target.value);
-                                                                    e.target.value = '';
+                                                        {/* Sub OUT Button - Styled as a button for better touch, using select overlay */}
+                                                        <div className="relative">
+                                                            <div className={`bg-red-50 text-red-700 border border-red-200 rounded flex items-center justify-center font-medium ${isLiveGameFullscreen ? 'px-4 py-2 text-sm' : 'px-2 py-1 text-xs'}`}>
+                                                                <ArrowRightLeft className={`mr-1 ${isLiveGameFullscreen ? 'w-4 h-4' : 'w-3 h-3'}`} /> Sair
+                                                            </div>
+                                                            <select 
+                                                                className="absolute inset-0 opacity-0 w-full h-full cursor-pointer"
+                                                                onChange={(e) => {
+                                                                    if (e.target.value) {
+                                                                        handleSubstitution(selectedMatchId, p.id, e.target.value);
+                                                                        e.target.value = '';
+                                                                    }
+                                                                }}
+                                                                defaultValue=""
+                                                            >
+                                                                <option value="" disabled>Substituir por...</option>
+                                                                {/* Only show convoked players NOT on field */}
+                                                                {players
+                                                                    .filter(sub => matches.find(m => m.id === selectedMatchId)?.convokedIds.includes(sub.id))
+                                                                    .filter(sub => !matches.find(m => m.id === selectedMatchId)?.gameData?.starters.includes(sub.id))
+                                                                    .map(sub => (
+                                                                        <option key={sub.id} value={sub.id}>Entra: #{sub.jerseyNumber} {sub.name}</option>
+                                                                    ))
                                                                 }
-                                                            }}
-                                                            defaultValue=""
-                                                        >
-                                                            <option value="" disabled>Sair...</option>
-                                                            {/* Only show convoked players NOT on field */}
-                                                            {players
-                                                                .filter(sub => matches.find(m => m.id === selectedMatchId)?.convokedIds.includes(sub.id))
-                                                                .filter(sub => !matches.find(m => m.id === selectedMatchId)?.gameData?.starters.includes(sub.id))
-                                                                .map(sub => (
-                                                                    <option key={sub.id} value={sub.id}>Entra: #{sub.jerseyNumber}</option>
-                                                                ))
-                                                            }
-                                                        </select>
+                                                            </select>
+                                                        </div>
                                                     </div>
                                                 </div>
                                             ))}
@@ -1095,33 +1276,38 @@ const App: React.FC = () => {
                                   </div>
 
                                    {/* Bench - Logic: Convoked MINUS Starters */}
-                                   <div className="h-1/3 bg-slate-50 rounded-xl border border-slate-200 overflow-hidden flex flex-col">
+                                   <div className={`bg-slate-50 rounded-xl border border-slate-200 overflow-hidden flex flex-col shrink-0 ${isLiveGameFullscreen ? 'h-1/4' : 'h-1/3'}`}>
                                       <div className="p-2 border-b border-slate-200 text-slate-500 font-bold text-xs">Banco (Suplentes)</div>
                                       <div className="overflow-y-auto p-2 space-y-1">
                                           {players
                                             .filter(p => matches.find(m => m.id === selectedMatchId)?.convokedIds.includes(p.id))
                                             .filter(p => !matches.find(m => m.id === selectedMatchId)?.gameData?.starters.includes(p.id))
                                             .map(p => (
-                                                <div key={p.id} className="flex justify-between p-2 bg-white border rounded text-sm items-center">
-                                                    <span>{p.jerseyNumber}. {p.name}</span>
+                                                <div key={p.id} className={`flex justify-between bg-white border rounded items-center ${isLiveGameFullscreen ? 'p-3' : 'p-2'}`}>
+                                                    <span className={`${isLiveGameFullscreen ? 'text-base' : 'text-sm'}`}>{p.jerseyNumber}. {p.name}</span>
                                                     
                                                     {/* Quick Sub IN Logic */}
-                                                    <select 
-                                                        className="text-xs bg-emerald-50 text-emerald-700 border border-emerald-200 rounded p-1 max-w-[80px]"
-                                                        onChange={(e) => {
-                                                            if (e.target.value) {
-                                                                handleSubstitution(selectedMatchId, e.target.value, p.id);
-                                                                e.target.value = ''; // Reset select
-                                                            }
-                                                        }}
-                                                        defaultValue=""
-                                                    >
-                                                        <option value="" disabled>Entrar...</option>
-                                                        {matches.find(m => m.id === selectedMatchId)?.gameData?.starters.map(starterId => {
-                                                            const starter = players.find(sp => sp.id === starterId);
-                                                            return <option key={starterId} value={starterId}>Sai: {starter?.jerseyNumber}</option>
-                                                        })}
-                                                    </select>
+                                                    <div className="relative">
+                                                         <div className={`bg-emerald-50 text-emerald-700 border border-emerald-200 rounded flex items-center justify-center font-medium ${isLiveGameFullscreen ? 'px-4 py-2 text-sm' : 'px-2 py-1 text-xs'}`}>
+                                                            <ArrowRightLeft className={`mr-1 ${isLiveGameFullscreen ? 'w-4 h-4' : 'w-3 h-3'}`} /> Entrar
+                                                         </div>
+                                                        <select 
+                                                            className="absolute inset-0 opacity-0 w-full h-full cursor-pointer"
+                                                            onChange={(e) => {
+                                                                if (e.target.value) {
+                                                                    handleSubstitution(selectedMatchId, e.target.value, p.id);
+                                                                    e.target.value = ''; // Reset select
+                                                                }
+                                                            }}
+                                                            defaultValue=""
+                                                        >
+                                                            <option value="" disabled>Substituir quem...</option>
+                                                            {matches.find(m => m.id === selectedMatchId)?.gameData?.starters.map(starterId => {
+                                                                const starter = players.find(sp => sp.id === starterId);
+                                                                return <option key={starterId} value={starterId}>Sai: #{starter?.jerseyNumber} {starter?.name}</option>
+                                                            })}
+                                                        </select>
+                                                    </div>
                                                 </div>
                                             ))}
                                       </div>
@@ -1167,6 +1353,7 @@ const App: React.FC = () => {
                        {visibleSquads.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
                      </select>
                      <input placeholder="Descrição..." className={inputClass} value={editingSession.description} onChange={e => setEditingSession({...editingSession, description: e.target.value})} />
+                     <textarea placeholder="Observações do treino..." rows={3} className={inputClass} value={editingSession.notes || ''} onChange={e => setEditingSession({...editingSession, notes: e.target.value})} />
                      <div className="flex gap-2">
                         <button onClick={() => setIsSessionModalOpen(false)} className="flex-1 py-2 bg-slate-100 text-slate-600 rounded">Cancelar</button>
                         <button onClick={saveSession} className="flex-1 py-2 bg-emerald-600 text-white rounded hover:bg-emerald-700">Guardar</button>
@@ -1213,13 +1400,18 @@ const App: React.FC = () => {
                {selectedSessionId ? (
                  <div className="bg-white rounded-xl shadow-sm border border-slate-200 h-full flex flex-col">
                    <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50 rounded-t-xl">
-                      <h3 className="font-bold text-slate-700 flex items-center">
-                        <UserCircle className="w-5 h-5 mr-2 text-emerald-600" />
-                        Registo de Presenças
-                      </h3>
-                      <div className="text-xs text-slate-500">
-                        {sessions.find(s => s.id === selectedSessionId)?.date}
+                      <div className="flex items-center">
+                          <h3 className="font-bold text-slate-700 flex items-center mr-3">
+                            <UserCircle className="w-5 h-5 mr-2 text-emerald-600" />
+                            Registo de Presenças
+                          </h3>
+                          <div className="text-xs text-slate-500">
+                            {sessions.find(s => s.id === selectedSessionId)?.date}
+                          </div>
                       </div>
+                      <button onClick={() => downloadTrainingPDF(selectedSessionId)} className="text-emerald-600 hover:bg-emerald-50 p-2 rounded flex items-center text-xs font-bold">
+                          <FileDown className="w-4 h-4 mr-1" /> PDF
+                      </button>
                    </div>
                    
                    <div className="p-2 md:p-4 overflow-y-auto flex-1">
@@ -1270,8 +1462,8 @@ const App: React.FC = () => {
         </div>
       )}
 
-      {/* ADMIN VIEW */}
-      {currentView === 'ADMIN' && (
+      {/* ADMIN VIEW - Protected by Role Check */}
+      {currentView === 'ADMIN' && currentUser?.role === UserRole.ADMIN && (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
            {/* Squad Management */}
            <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
@@ -1309,7 +1501,14 @@ const App: React.FC = () => {
               </h3>
               
               <div className="space-y-3 mb-6 bg-slate-50 p-4 rounded-lg border border-slate-100">
-                <h4 className="text-sm font-bold text-slate-500 uppercase">Adicionar Novo</h4>
+                <h4 className="text-sm font-bold text-slate-500 uppercase flex justify-between">
+                    {newUser.id ? `Editar Utilizador` : 'Adicionar Novo'}
+                    {newUser.id && (
+                        <button onClick={cancelEditUser} className="text-xs text-red-500 flex items-center hover:underline">
+                            <XIcon className="w-3 h-3 mr-1" /> Cancelar
+                        </button>
+                    )}
+                </h4>
                 <input 
                   placeholder="Nome" 
                   className={inputClass}
@@ -1317,15 +1516,24 @@ const App: React.FC = () => {
                   onChange={e => setNewUser({...newUser, name: e.target.value})}
                 />
                 <input 
-                  placeholder="Username" 
+                  placeholder="Username (Login)" 
                   className={inputClass}
                   value={newUser.username}
                   onChange={e => setNewUser({...newUser, username: e.target.value})}
+                  disabled={!!newUser.id && newUser.username === 'admin'} // Protect admin username
+                />
+                 <input 
+                  type="text"
+                  placeholder={newUser.id ? "Nova Password (deixe em branco para manter)" : "Password"} 
+                  className={inputClass}
+                  value={newUser.password}
+                  onChange={e => setNewUser({...newUser, password: e.target.value})}
                 />
                 <select 
                   className={inputClass}
                   value={newUser.role}
                   onChange={e => setNewUser({...newUser, role: e.target.value as UserRole})}
+                  disabled={newUser.username === 'admin'} // Cannot demote main admin
                 >
                   <option value={UserRole.ADMIN}>Administrador</option>
                   <option value={UserRole.COACH}>Treinador</option>
@@ -1351,14 +1559,19 @@ const App: React.FC = () => {
                    </div>
                 )}
 
-                <button onClick={addUser} className="w-full py-2 bg-slate-800 text-white rounded hover:bg-slate-900 font-medium">Adicionar Utilizador</button>
+                <button onClick={saveUser} className="w-full py-2 bg-slate-800 text-white rounded hover:bg-slate-900 font-medium">
+                    {newUser.id ? 'Atualizar Utilizador' : 'Adicionar Utilizador'}
+                </button>
               </div>
 
               <div className="space-y-2">
                  {users.map(u => (
-                   <div key={u.id} className="p-3 border rounded-lg flex justify-between items-center">
+                   <div key={u.id} className="p-3 border rounded-lg flex justify-between items-center group">
                       <div>
-                        <div className="font-bold text-slate-800">{u.name}</div>
+                        <div className="font-bold text-slate-800 flex items-center gap-2">
+                            {u.name}
+                            {u.username === 'admin' && <Shield className="w-3 h-3 text-emerald-600" />}
+                        </div>
                         <div className="text-xs text-slate-500">@{u.username}</div>
                         {u.role !== UserRole.ADMIN && u.allowedSquads && u.allowedSquads.length > 0 && (
                           <div className="text-xs text-emerald-600 mt-1">
@@ -1368,11 +1581,16 @@ const App: React.FC = () => {
                       </div>
                       <div className="flex flex-col items-end gap-1">
                         <span className="px-2 py-1 bg-slate-100 text-slate-600 text-xs font-semibold rounded">{u.role}</span>
-                        {u.role !== UserRole.ADMIN && (
-                            <button onClick={() => deleteUser(u.id)} className="text-xs text-red-500 hover:text-red-700 flex items-center mt-1">
-                                <Trash2 className="w-3 h-3 mr-1"/> Eliminar
+                        <div className="flex gap-2 mt-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                            <button onClick={() => startEditUser(u)} className="text-xs text-blue-500 hover:text-blue-700 flex items-center">
+                                <Edit2 className="w-3 h-3 mr-1"/> Editar
                             </button>
-                        )}
+                            {u.username !== 'admin' && (
+                                <button onClick={() => deleteUser(u.id)} className="text-xs text-red-500 hover:text-red-700 flex items-center">
+                                    <Trash2 className="w-3 h-3 mr-1"/> Eliminar
+                                </button>
+                            )}
+                        </div>
                       </div>
                    </div>
                  ))}
