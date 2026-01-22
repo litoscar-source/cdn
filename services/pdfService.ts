@@ -62,7 +62,8 @@ export const generateConvocationPDF = async (
   doc.setFont("helvetica", "bold");
   doc.text("Local:", 14, detailsY + 12);
   doc.setFont("helvetica", "normal");
-  doc.text(match.location, 40, detailsY + 12);
+  const venueText = match.venue ? `${match.location} (${match.venue})` : match.location;
+  doc.text(venueText, 40, detailsY + 12);
 
   if (match.playerKit || match.goalkeeperKit) {
      detailsY += 6;
@@ -118,16 +119,36 @@ export const generateMatchSheetPDF = async (
     const doc = new jsPDF();
     const startY = await addHeader(doc, `FICHA DE JOGO - ${squad.name}`, "Relatório de Jogo");
 
+    // -- Calculate Result --
+    const goalsUs = match.gameData?.events?.filter(e => e.type === 'GOAL' && e.playerId !== 'opponent').length || 0;
+    const goalsThem = match.gameData?.events?.filter(e => e.type === 'GOAL' && e.playerId === 'opponent').length || 0;
+
     // -- Match Details --
     doc.setFontSize(11);
     doc.setTextColor(0, 0, 0);
     let detailsY = startY;
 
+    // Line 1: Opponent
     doc.setFont("helvetica", "bold"); doc.text("Adversário:", 14, detailsY);
     doc.setFont("helvetica", "normal"); doc.text(match.opponent, 40, detailsY);
     
+    // Result Display (Prominent)
+    doc.setFontSize(16);
+    doc.setFont("helvetica", "bold");
+    doc.setTextColor(30, 41, 59); // Slate 800
+    doc.text(`${goalsUs} - ${goalsThem}`, 150, detailsY);
+    doc.setFontSize(11);
+    doc.setTextColor(0, 0, 0);
+
+    // Line 2: Date
     doc.setFont("helvetica", "bold"); doc.text("Data:", 14, detailsY + 6);
     doc.setFont("helvetica", "normal"); doc.text(`${match.date} ${match.time}`, 40, detailsY + 6);
+
+    // Line 3: Location
+    doc.setFont("helvetica", "bold"); doc.text("Local:", 14, detailsY + 12);
+    doc.setFont("helvetica", "normal");
+    const venueText = match.venue ? `${match.location} (${match.venue})` : match.location;
+    doc.text(venueText, 40, detailsY + 12);
 
     // -- Stats Table --
     // Filter only players that were convoked
@@ -153,7 +174,7 @@ export const generateMatchSheetPDF = async (
     });
 
     autoTable(doc, {
-        startY: detailsY + 15,
+        startY: detailsY + 20,
         head: [['#', 'Nome', 'Início', 'Minutos', 'Golos', 'Cartões']],
         body: tableData,
         theme: 'grid',
@@ -174,7 +195,7 @@ export const generateMatchSheetPDF = async (
     doc.setFontSize(12);
     doc.setTextColor(0,0,0);
     doc.setFont("helvetica", "bold");
-    doc.text("OBSERVAÇÕES DO JOGO:", 14, finalY);
+    doc.text("COMENTÁRIOS / CRÓNICA DE JOGO:", 14, finalY);
 
     // Pre-filled notes if existing
     if (match.notes) {

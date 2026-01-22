@@ -100,6 +100,7 @@ export interface Match {
   time: string;
   opponent: string;
   location: 'Casa' | 'Fora';
+  venue?: string; // Specific field name (especially for Away games)
   convokedIds: string[];
   notes?: string;
   // New Fields

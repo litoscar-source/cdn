@@ -76,6 +76,10 @@ export const storageService = {
      }
   },
 
+  deleteSession: async (id: string) => {
+      await supabase.from('sessions').delete().eq('id', id);
+  },
+
   // --- ATTENDANCE ---
   getAttendance: async (): Promise<AttendanceRecord[]> => {
     const { data, error } = await supabase.from('attendance').select('*');
@@ -108,6 +112,10 @@ export const storageService = {
       for(const m of matches) {
           await supabase.from('matches').upsert(m);
       }
+  },
+
+  deleteMatch: async (id: string) => {
+      await supabase.from('matches').delete().eq('id', id);
   },
 
   // --- AUTH (Simplified for this app structure) ---

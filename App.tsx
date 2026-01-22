@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { 
-  User, Squad, Player, TrainingSession, AttendanceRecord, ViewState, UserRole, AttendanceStatus, Match, MatchData 
+  User, Squad, Player, TrainingSession, AttendanceRecord, ViewState, UserRole, AttendanceStatus, Match, MatchData, MatchEvent 
 } from './types';
 import { storageService } from './services/storageService';
 import { generateConvocationPDF, generateMatchSheetPDF, generateTrainingSessionPDF } from './services/pdfService';
@@ -8,7 +8,7 @@ import { CLUB_NAME, CLUB_LOGO_URL } from './constants';
 import Layout from './components/Layout';
 import PlayerForm from './components/PlayerForm';
 import { 
-  Plus, Search, Filter, Trash2, Edit2, Check, X as XIcon, AlertCircle, Clock, Save, UserPlus, Users, UserCircle, CalendarDays, KeyRound, Flag, Copy, FileDown, Loader2, Play, Pause, Square, Shirt, Shield, ArrowRightLeft, FileText, Move, Maximize2, Minimize2, UserMinus, UserCheck, Printer, RefreshCcw
+  Plus, Search, Filter, Trash2, Edit2, Check, X as XIcon, AlertCircle, Clock, Save, UserPlus, Users, UserCircle, CalendarDays, KeyRound, Flag, Copy, FileDown, Loader2, Play, Pause, Square, Shirt, Shield, ArrowRightLeft, FileText, Move, Maximize2, Minimize2, UserMinus, UserCheck, Printer, RefreshCcw, Trophy, Minus, PlusCircle, RotateCcw
 } from 'lucide-react';
 
 const App: React.FC = () => {
@@ -310,6 +310,15 @@ const App: React.FC = () => {
     await storageService.saveSessions([sessionToSave]); // DB
   };
 
+  const deleteSession = async (id: string) => {
+      if(confirm('Eliminar esta sessão de treino? Os registos de presença serão perdidos.')) {
+          const updated = sessions.filter(s => s.id !== id);
+          setSessions(updated);
+          if (selectedSessionId === id) setSelectedSessionId(null);
+          await storageService.deleteSession(id);
+      }
+  };
+
   const toggleAttendance = async (playerId: string, sessionId: string, status: AttendanceStatus) => {
     const existingIndex = attendance.findIndex(a => a.playerId === playerId && a.sessionId === sessionId);
     let newAttendance = [...attendance];
@@ -360,7 +369,8 @@ const App: React.FC = () => {
           date: new Date().toISOString().split('T')[0], 
           time: '15:00', 
           squadId: visibleSquads[0]?.id,
-          location: 'Casa'
+          location: 'Casa',
+          venue: ''
       });
       setIsMatchModalOpen(true);
   }
@@ -382,6 +392,7 @@ const App: React.FC = () => {
             time: editingMatch.time || '15:00',
             opponent: editingMatch.opponent!,
             location: editingMatch.location as 'Casa' | 'Fora' || 'Casa',
+            venue: editingMatch.venue,
             convokedIds: [],
             notes: editingMatch.notes || '',
             playerKit: editingMatch.playerKit,
@@ -393,6 +404,15 @@ const App: React.FC = () => {
     setIsMatchModalOpen(false);
     setEditingMatch({});
     await storageService.saveMatches([matchToSave]);
+  };
+
+  const deleteMatch = async (id: string) => {
+      if(confirm('Eliminar este jogo? Todos os dados (golos, estatísticas) serão perdidos e removidos do histórico dos atletas.')) {
+          const updated = matches.filter(m => m.id !== id);
+          setMatches(updated);
+          if (selectedMatchId === id) setSelectedMatchId(null);
+          await storageService.deleteMatch(id);
+      }
   };
 
   const updateMatchGameData = async (matchId: string, data: Partial<MatchData>) => {
@@ -562,7 +582,17 @@ const App: React.FC = () => {
       const newStarters = (match.gameData?.starters || []).filter(id => id !== playerOutId);
       newStarters.push(playerInId);
       
-      updateMatchGameData(matchId, { starters: newStarters });
+      // We could also record an event here
+      const minute = Math.ceil((match.gameData?.timer || 0) / 60);
+      const subEvent: MatchEvent = {
+          type: 'SUBSTITUTION',
+          minute,
+          playerId: playerInId,
+          playerOutId: playerOutId
+      };
+      const newEvents = [...(match.gameData?.events || []), subEvent];
+      
+      updateMatchGameData(matchId, { starters: newStarters, events: newEvents });
   };
 
   const toggleTimer = (matchId: string) => {
@@ -574,8 +604,81 @@ const App: React.FC = () => {
 
   const setGamePeriod = (matchId: string, period: MatchData['currentPeriod']) => {
       const match = matches.find(m => m.id === matchId);
-      // Reset timer to 0 when changing period
-      updateMatchGameData(matchId, { currentPeriod: period, isTimerRunning: false, timer: 0 });
+      if(!match) return;
+
+      // Smart Logic: Stop timer on HT or FT, Reset timer on new periods
+      const shouldStop = period === 'HT' || period === 'FT';
+      
+      updateMatchGameData(matchId, { 
+          currentPeriod: period, 
+          isTimerRunning: false, 
+          timer: 0 
+      });
+  };
+
+  const handlePlayerGoal = (matchId: string, playerId: string, delta: number) => {
+      const match = matches.find(m => m.id === matchId);
+      if(!match) return;
+
+      let newEvents = [...(match.gameData?.events || [])];
+      
+      if (delta > 0) {
+          // Add Goal
+          const minute = Math.ceil((match.gameData?.timer || 0) / 60);
+          const newEvent: MatchEvent = {
+              type: 'GOAL',
+              minute,
+              playerId: playerId
+          };
+          newEvents.push(newEvent);
+      } else {
+          // Remove Last Goal for this player
+          // Find the last goal event index for this player
+          // We iterate backwards
+          let indexToRemove = -1;
+          for (let i = newEvents.length - 1; i >= 0; i--) {
+              if (newEvents[i].type === 'GOAL' && newEvents[i].playerId === playerId) {
+                  indexToRemove = i;
+                  break;
+              }
+          }
+          if (indexToRemove !== -1) {
+              newEvents.splice(indexToRemove, 1);
+          }
+      }
+      
+      updateMatchGameData(matchId, { events: newEvents });
+  };
+
+  const handleOpponentGoal = (matchId: string, action: 'ADD' | 'REMOVE') => {
+      const match = matches.find(m => m.id === matchId);
+      if(!match) return;
+
+      const events = match.gameData?.events || [];
+      
+      if (action === 'ADD') {
+          const minute = Math.ceil((match.gameData?.timer || 0) / 60);
+          const newEvent: MatchEvent = {
+              type: 'GOAL',
+              minute,
+              playerId: 'opponent' // Reserved ID for opponent
+          };
+          updateMatchGameData(matchId, { events: [...events, newEvent] });
+      } else {
+          // Remove last opponent goal
+          // We need to find the last goal with playerId 'opponent'
+          const oppGoals = events.filter(e => e.type === 'GOAL' && e.playerId === 'opponent');
+          if (oppGoals.length > 0) {
+              // Remove one instance
+              const lastGoal = oppGoals[oppGoals.length - 1];
+              // We can't identify easily without ID in event, but let's filter by index or reference
+              // Simpler: filter out ONE opponent goal
+              const indexToRemove = events.lastIndexOf(lastGoal);
+              const newEvents = [...events];
+              if (indexToRemove !== -1) newEvents.splice(indexToRemove, 1);
+              updateMatchGameData(matchId, { events: newEvents });
+          }
+      }
   };
   
   const formatTime = (seconds: number) => {
@@ -627,6 +730,7 @@ const App: React.FC = () => {
     text += `Vs: ${match.opponent} (${match.location})\n`;
     text += `Data: ${match.date} ${match.time}\n`;
     if(match.playerKit) text += `Equip: ${match.playerKit}\n`;
+    if(match.venue) text += `Local: ${match.venue}\n`;
     if (match.notes) text += `Obs: ${match.notes}\n`;
     text += `\nATLETAS:\n`;
     convokedPlayers.forEach(p => {
@@ -942,11 +1046,19 @@ const App: React.FC = () => {
                          <input placeholder="Kit Jogador" className={inputClass} value={editingMatch.playerKit || ''} onChange={e => setEditingMatch({...editingMatch, playerKit: e.target.value})} />
                          <input placeholder="Kit GR" className={inputClass} value={editingMatch.goalkeeperKit || ''} onChange={e => setEditingMatch({...editingMatch, goalkeeperKit: e.target.value})} />
                      </div>
-                     <textarea placeholder="Notas / Observações de jogo..." className={inputClass} value={editingMatch.notes || ''} onChange={e => setEditingMatch({...editingMatch, notes: e.target.value})} rows={3} />
+                     <textarea placeholder="Comentários / Crónica de Jogo..." className={inputClass} value={editingMatch.notes || ''} onChange={e => setEditingMatch({...editingMatch, notes: e.target.value})} rows={3} />
                      <select className={inputClass} value={editingMatch.location} onChange={e => setEditingMatch({...editingMatch, location: e.target.value as any})}>
                        <option value="Casa">Casa</option>
                        <option value="Fora">Fora</option>
                      </select>
+                     
+                     <input 
+                        placeholder="Recinto / Campo (Opcional)" 
+                        className={inputClass} 
+                        value={editingMatch.venue || ''} 
+                        onChange={e => setEditingMatch({...editingMatch, venue: e.target.value})} 
+                     />
+
                      <select className={inputClass} value={editingMatch.squadId} onChange={e => setEditingMatch({...editingMatch, squadId: e.target.value})}>
                        <option value="">Escalão...</option>
                        {visibleSquads.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
@@ -973,17 +1085,27 @@ const App: React.FC = () => {
                     }`}
                     onClick={() => setSelectedMatchId(match.id)}
                   >
-                    <button 
-                        onClick={(e) => { e.stopPropagation(); openMatchModal(match); }}
-                        className="absolute top-2 right-2 p-1 bg-white/20 hover:bg-white/40 rounded text-inherit opacity-0 group-hover:opacity-100 transition"
-                    >
-                        <Edit2 className="w-4 h-4" />
-                    </button>
+                    <div className="absolute top-2 right-2 flex gap-1">
+                        <button 
+                            onClick={(e) => { e.stopPropagation(); deleteMatch(match.id); }}
+                            className="p-1 bg-white/20 hover:bg-red-500 hover:text-white rounded text-inherit opacity-0 group-hover:opacity-100 transition"
+                            title="Eliminar Jogo"
+                        >
+                            <Trash2 className="w-4 h-4" />
+                        </button>
+                        <button 
+                            onClick={(e) => { e.stopPropagation(); openMatchModal(match); }}
+                            className="p-1 bg-white/20 hover:bg-white/40 rounded text-inherit opacity-0 group-hover:opacity-100 transition"
+                            title="Editar"
+                        >
+                            <Edit2 className="w-4 h-4" />
+                        </button>
+                    </div>
 
                     <div className="font-bold flex justify-between items-start">
                       <div>
                         <div>{match.opponent}</div>
-                        <div className="text-xs font-normal opacity-80">{match.location}</div>
+                        <div className="text-xs font-normal opacity-80">{match.location} {match.venue ? `(${match.venue})` : ''}</div>
                       </div>
                       <span className={`text-xs px-2 py-0.5 rounded ${selectedMatchId === match.id ? 'bg-emerald-500' : 'bg-slate-100 text-slate-500'}`}>
                         {squads.find(s => s.id === match.squadId)?.name}
@@ -1181,46 +1303,81 @@ const App: React.FC = () => {
                           {activeGameTab === 'LIVE' && matches.find(m => m.id === selectedMatchId) && (
                               <div className={`flex flex-col h-full space-y-4 ${isLiveGameFullscreen ? 'fixed inset-0 z-50 bg-slate-100 p-2 md:p-4' : ''}`}>
                                   {/* Scoreboard / Timer */}
-                                  <div className="bg-slate-900 text-white p-4 rounded-xl shadow-lg flex justify-between items-center shrink-0">
-                                      <div>
-                                          <div className="text-xs text-slate-400 uppercase flex items-center gap-2">
-                                              Tempo de Jogo
-                                              {matches.find(m => m.id === selectedMatchId)?.gameData?.isTimerRunning ? 
-                                                <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse"/> : 
-                                                <span className="w-2 h-2 rounded-full bg-slate-500"/>
-                                              }
-                                          </div>
-                                          <div className="flex items-center gap-4">
-                                              <div className={`font-mono font-bold tracking-wider text-emerald-400 ${isLiveGameFullscreen ? 'text-5xl' : 'text-4xl'}`}>
-                                                  {formatTime(matches.find(m => m.id === selectedMatchId)?.gameData?.timer || 0)}
+                                  <div className="bg-slate-900 text-white rounded-xl shadow-lg flex flex-col shrink-0 overflow-hidden">
+                                      {/* Top Section: Score & Timer */}
+                                      <div className="p-4 flex flex-col md:flex-row justify-between items-center gap-4">
+                                          {/* Score Display (Mobile Center) */}
+                                          <div className="flex items-center space-x-6 order-2 md:order-1 justify-center w-full md:w-auto">
+                                              <div className="flex flex-col items-center">
+                                                  <span className="text-xs text-slate-400 uppercase font-bold tracking-widest">Nós</span>
+                                                  <span className="text-5xl md:text-4xl font-mono font-bold text-emerald-400">
+                                                      {matches.find(m => m.id === selectedMatchId)?.gameData?.events.filter(e => e.type === 'GOAL' && e.playerId !== 'opponent').length || 0}
+                                                  </span>
                                               </div>
-                                              <button 
-                                                onClick={() => toggleTimer(selectedMatchId!)}
-                                                className={`rounded-full border flex items-center justify-center transition active:scale-95 ${isLiveGameFullscreen ? 'w-16 h-16' : 'p-2'} ${matches.find(m => m.id === selectedMatchId)?.gameData?.isTimerRunning ? 'bg-yellow-500/20 border-yellow-500 text-yellow-500' : 'bg-emerald-500/20 border-emerald-500 text-emerald-500'}`}
-                                              >
-                                                  {matches.find(m => m.id === selectedMatchId)?.gameData?.isTimerRunning ? <Pause className={`${isLiveGameFullscreen ? 'w-8 h-8' : 'w-5 h-5'}`} /> : <Play className={`${isLiveGameFullscreen ? 'w-8 h-8' : 'w-5 h-5'}`} />}
+                                              <div className="text-3xl text-slate-600 font-bold opacity-30">-</div>
+                                              <div className="flex flex-col items-center">
+                                                  <span className="text-xs text-slate-400 uppercase font-bold tracking-widest">Eles</span>
+                                                  <div className="flex items-center gap-3">
+                                                     <span className="text-5xl md:text-4xl font-mono font-bold text-red-400">
+                                                         {matches.find(m => m.id === selectedMatchId)?.gameData?.events.filter(e => e.type === 'GOAL' && e.playerId === 'opponent').length || 0}
+                                                     </span>
+                                                     <div className="flex flex-col gap-1">
+                                                         <button onClick={() => handleOpponentGoal(selectedMatchId!, 'ADD')} className="p-1.5 bg-slate-800 hover:bg-slate-700 rounded-lg text-green-400 transition"><PlusCircle className="w-4 h-4"/></button>
+                                                         <button onClick={() => handleOpponentGoal(selectedMatchId!, 'REMOVE')} className="p-1.5 bg-slate-800 hover:bg-slate-700 rounded-lg text-red-400 transition"><Minus className="w-4 h-4"/></button>
+                                                     </div>
+                                                  </div>
+                                              </div>
+                                          </div>
+
+                                          {/* Timer Controls */}
+                                          <div className="flex flex-col items-center gap-2 order-1 md:order-2 w-full md:w-auto border-b md:border-b-0 border-slate-800 pb-4 md:pb-0">
+                                               <div className="flex items-center gap-2 text-xs text-slate-400 uppercase font-bold tracking-widest">
+                                                  {matches.find(m => m.id === selectedMatchId)?.gameData?.isTimerRunning ? 
+                                                    <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse shadow-[0_0_8px_rgba(239,68,68,0.6)]"/> : 
+                                                    <span className="w-2 h-2 rounded-full bg-slate-600"/>
+                                                  }
+                                                  <span>Tempo de Jogo</span>
+                                              </div>
+                                              <div className="flex items-center gap-4">
+                                                  <div className={`font-mono font-bold tracking-wider text-white tabular-nums ${isLiveGameFullscreen ? 'text-6xl md:text-5xl' : 'text-5xl md:text-4xl'}`}>
+                                                      {formatTime(matches.find(m => m.id === selectedMatchId)?.gameData?.timer || 0)}
+                                                  </div>
+                                                  <button 
+                                                    onClick={() => toggleTimer(selectedMatchId!)}
+                                                    className={`rounded-full flex items-center justify-center transition active:scale-95 shadow-lg ${isLiveGameFullscreen ? 'w-16 h-16' : 'w-14 h-14'} ${matches.find(m => m.id === selectedMatchId)?.gameData?.isTimerRunning ? 'bg-yellow-500 text-slate-900 hover:bg-yellow-400' : 'bg-emerald-600 text-white hover:bg-emerald-500'}`}
+                                                  >
+                                                      {matches.find(m => m.id === selectedMatchId)?.gameData?.isTimerRunning ? <Pause className="w-6 h-6 fill-current" /> : <Play className="w-6 h-6 fill-current ml-1" />}
+                                                  </button>
+                                              </div>
+                                          </div>
+
+                                          {/* Fullscreen Toggle (Desktop) */}
+                                          <div className="hidden md:flex order-3">
+                                              <button onClick={() => setIsLiveGameFullscreen(!isLiveGameFullscreen)} className="text-slate-500 hover:text-white transition">
+                                                  {isLiveGameFullscreen ? <Minimize2 className="w-6 h-6"/> : <Maximize2 className="w-6 h-6"/>}
                                               </button>
                                           </div>
                                       </div>
-                                      
-                                      <div className="flex flex-col items-end space-y-2">
-                                          <button onClick={() => setIsLiveGameFullscreen(!isLiveGameFullscreen)} className="text-slate-400 hover:text-white mb-2">
-                                              {isLiveGameFullscreen ? <Minimize2 className="w-6 h-6"/> : <Maximize2 className="w-6 h-6"/>}
-                                          </button>
-                                          <div className="flex space-x-1">
-                                              {['1H', 'HT', '2H', 'FT'].map((p) => {
-                                                  const current = matches.find(m => m.id === selectedMatchId)?.gameData?.currentPeriod;
-                                                  return (
-                                                      <button 
-                                                        key={p}
-                                                        onClick={() => setGamePeriod(selectedMatchId, p as any)}
-                                                        className={`px-3 py-2 rounded text-xs font-bold transition ${current === p ? 'bg-emerald-500 text-white' : 'bg-slate-800 text-slate-500 hover:bg-slate-700'}`}
-                                                      >
-                                                          {p === '1H' ? '1ª' : p === 'HT' ? 'INT' : p === '2H' ? '2ª' : 'FIM'}
-                                                      </button>
-                                                  )
-                                              })}
-                                          </div>
+
+                                      {/* Bottom Section: Period Controls (Scrollable on Mobile) */}
+                                      <div className="bg-slate-800 p-2 flex overflow-x-auto gap-2 no-scrollbar">
+                                          {['1H', 'HT', '2H', 'FT'].map((p) => {
+                                              const current = matches.find(m => m.id === selectedMatchId)?.gameData?.currentPeriod;
+                                              const isActive = current === p;
+                                              return (
+                                                  <button 
+                                                    key={p}
+                                                    onClick={() => setGamePeriod(selectedMatchId, p as any)}
+                                                    className={`flex-1 py-3 px-4 rounded-lg text-sm font-bold whitespace-nowrap transition active:scale-95 flex flex-col items-center justify-center ${isActive ? 'bg-slate-700 text-white shadow-inner ring-1 ring-slate-600' : 'bg-slate-900 text-slate-500 hover:bg-slate-700 hover:text-slate-300'}`}
+                                                  >
+                                                      {p === '1H' && '1ª PARTE'}
+                                                      {p === 'HT' && 'INTERVALO'}
+                                                      {p === '2H' && '2ª PARTE'}
+                                                      {p === 'FT' && 'FIM'}
+                                                      {isActive && <div className="h-1 w-8 bg-emerald-500 rounded-full mt-1"/>}
+                                                  </button>
+                                              )
+                                          })}
                                       </div>
                                   </div>
 
@@ -1233,20 +1390,54 @@ const App: React.FC = () => {
                                       <div className="overflow-y-auto flex-1 p-2 space-y-2">
                                          {players
                                             .filter(p => matches.find(m => m.id === selectedMatchId)?.gameData?.starters.includes(p.id))
-                                            .map(p => (
-                                                <div key={p.id} className={`flex justify-between items-center border rounded-lg bg-white shadow-sm ${isLiveGameFullscreen ? 'p-4' : 'p-2'}`}>
-                                                    <div className="flex items-center">
-                                                        <span className={`rounded-full bg-slate-200 text-slate-600 flex items-center justify-center font-bold mr-3 ${isLiveGameFullscreen ? 'w-10 h-10 text-lg' : 'w-6 h-6 text-xs'}`}>{p.jerseyNumber}</span>
-                                                        <span className={`font-medium text-slate-800 ${isLiveGameFullscreen ? 'text-lg' : 'text-base'}`}>{p.name}</span>
+                                            .map(p => {
+                                                const goals = matches.find(m => m.id === selectedMatchId)?.gameData?.events.filter(e => e.type === 'GOAL' && e.playerId === p.id).length || 0;
+                                                return (
+                                                <div key={p.id} className={`flex flex-col sm:flex-row sm:justify-between sm:items-center border rounded-lg bg-white shadow-sm ${isLiveGameFullscreen ? 'p-3' : 'p-2'}`}>
+                                                    <div className="flex items-center mb-2 sm:mb-0">
+                                                        <span className={`rounded-full bg-slate-800 text-white flex items-center justify-center font-bold mr-3 shadow-sm ${isLiveGameFullscreen ? 'w-10 h-10 text-lg' : 'w-8 h-8 text-base'}`}>{p.jerseyNumber}</span>
+                                                        <div>
+                                                            <div className={`font-bold text-slate-800 leading-tight ${isLiveGameFullscreen ? 'text-lg' : 'text-base'}`}>{p.name}</div>
+                                                            {/* Simple Goal Indicator */}
+                                                            {goals > 0 && (
+                                                                <div className="flex items-center text-xs text-yellow-600 font-bold mt-0.5">
+                                                                    <Trophy className="w-3 h-3 mr-1 fill-yellow-500" /> {goals} {goals === 1 ? 'Golo' : 'Golos'}
+                                                                </div>
+                                                            )}
+                                                        </div>
                                                     </div>
-                                                    <div className="flex items-center space-x-4">
-                                                        <span className={`font-mono font-bold text-slate-700 ${isLiveGameFullscreen ? 'text-2xl' : 'text-lg'}`}>
+                                                    
+                                                    <div className="flex items-center justify-between sm:justify-end gap-3 w-full sm:w-auto">
+                                                        <span className={`font-mono font-bold text-slate-400 w-12 text-center ${isLiveGameFullscreen ? 'text-xl' : 'text-lg'}`}>
                                                             {matches.find(m => m.id === selectedMatchId)?.gameData?.playerMinutes?.[p.id] || 0}'
                                                         </span>
-                                                        {/* Sub OUT Button - Styled as a button for better touch, using select overlay */}
+                                                        
+                                                        <div className="h-8 w-px bg-slate-200 mx-1 hidden sm:block"></div>
+
+                                                        {/* GOAL CONTROLS */}
+                                                        <div className="flex items-center bg-slate-100 rounded-lg p-1 border border-slate-200">
+                                                            <button 
+                                                                onClick={() => handlePlayerGoal(selectedMatchId!, p.id, -1)}
+                                                                disabled={goals === 0}
+                                                                className={`p-2 rounded hover:bg-white transition ${goals === 0 ? 'text-slate-300' : 'text-slate-600'}`}
+                                                            >
+                                                                <Minus className="w-4 h-4" />
+                                                            </button>
+                                                            <div className="w-8 text-center font-bold text-slate-800 flex flex-col items-center justify-center leading-none">
+                                                                <span className="text-lg">{goals}</span>
+                                                            </div>
+                                                            <button 
+                                                                onClick={() => handlePlayerGoal(selectedMatchId!, p.id, 1)}
+                                                                className="p-2 rounded bg-white text-emerald-600 shadow-sm border border-emerald-100 hover:text-emerald-700 active:scale-95 transition"
+                                                            >
+                                                                <Plus className="w-4 h-4" />
+                                                            </button>
+                                                        </div>
+
+                                                        {/* Sub OUT Button */}
                                                         <div className="relative">
-                                                            <div className={`bg-red-50 text-red-700 border border-red-200 rounded flex items-center justify-center font-medium ${isLiveGameFullscreen ? 'px-4 py-2 text-sm' : 'px-2 py-1 text-xs'}`}>
-                                                                <ArrowRightLeft className={`mr-1 ${isLiveGameFullscreen ? 'w-4 h-4' : 'w-3 h-3'}`} /> Sair
+                                                            <div className={`bg-red-50 text-red-700 border border-red-200 rounded-lg flex items-center justify-center font-bold active:bg-red-100 transition cursor-pointer ${isLiveGameFullscreen ? 'px-4 py-2 text-sm' : 'px-3 py-2 text-xs'}`}>
+                                                                <ArrowRightLeft className={`mr-1.5 ${isLiveGameFullscreen ? 'w-4 h-4' : 'w-3 h-3'}`} /> Sair
                                                             </div>
                                                             <select 
                                                                 className="absolute inset-0 opacity-0 w-full h-full cursor-pointer"
@@ -1271,25 +1462,33 @@ const App: React.FC = () => {
                                                         </div>
                                                     </div>
                                                 </div>
-                                            ))}
+                                            )})}
                                       </div>
                                   </div>
 
                                    {/* Bench - Logic: Convoked MINUS Starters */}
                                    <div className={`bg-slate-50 rounded-xl border border-slate-200 overflow-hidden flex flex-col shrink-0 ${isLiveGameFullscreen ? 'h-1/4' : 'h-1/3'}`}>
-                                      <div className="p-2 border-b border-slate-200 text-slate-500 font-bold text-xs">Banco (Suplentes)</div>
+                                      <div className="p-2 border-b border-slate-200 text-slate-500 font-bold text-xs flex justify-between items-center">
+                                          <span>BANCO (SUPLENTES)</span>
+                                          <span className="bg-slate-200 px-2 py-0.5 rounded text-[10px] text-slate-600">
+                                            {players.filter(p => matches.find(m => m.id === selectedMatchId)?.convokedIds.includes(p.id))
+                                            .filter(p => !matches.find(m => m.id === selectedMatchId)?.gameData?.starters.includes(p.id)).length} Jogadores
+                                          </span>
+                                      </div>
                                       <div className="overflow-y-auto p-2 space-y-1">
                                           {players
                                             .filter(p => matches.find(m => m.id === selectedMatchId)?.convokedIds.includes(p.id))
                                             .filter(p => !matches.find(m => m.id === selectedMatchId)?.gameData?.starters.includes(p.id))
                                             .map(p => (
                                                 <div key={p.id} className={`flex justify-between bg-white border rounded items-center ${isLiveGameFullscreen ? 'p-3' : 'p-2'}`}>
-                                                    <span className={`${isLiveGameFullscreen ? 'text-base' : 'text-sm'}`}>{p.jerseyNumber}. {p.name}</span>
+                                                    <span className={`text-slate-600 font-medium ${isLiveGameFullscreen ? 'text-base' : 'text-sm'}`}>
+                                                        <b className="text-slate-800 mr-1">{p.jerseyNumber}.</b> {p.name}
+                                                    </span>
                                                     
                                                     {/* Quick Sub IN Logic */}
                                                     <div className="relative">
-                                                         <div className={`bg-emerald-50 text-emerald-700 border border-emerald-200 rounded flex items-center justify-center font-medium ${isLiveGameFullscreen ? 'px-4 py-2 text-sm' : 'px-2 py-1 text-xs'}`}>
-                                                            <ArrowRightLeft className={`mr-1 ${isLiveGameFullscreen ? 'w-4 h-4' : 'w-3 h-3'}`} /> Entrar
+                                                         <div className={`bg-emerald-50 text-emerald-700 border border-emerald-200 rounded-lg flex items-center justify-center font-bold active:bg-emerald-100 transition ${isLiveGameFullscreen ? 'px-4 py-2 text-sm' : 'px-3 py-1.5 text-xs'}`}>
+                                                            <ArrowRightLeft className={`mr-1.5 ${isLiveGameFullscreen ? 'w-4 h-4' : 'w-3 h-3'}`} /> Entrar
                                                          </div>
                                                         <select 
                                                             className="absolute inset-0 opacity-0 w-full h-full cursor-pointer"
@@ -1376,12 +1575,22 @@ const App: React.FC = () => {
                         : 'bg-white hover:bg-slate-50 border-slate-200 text-slate-700'
                     }`}
                   >
-                     <button 
-                        onClick={(e) => { e.stopPropagation(); openSessionModal(session); }}
-                        className="absolute top-2 right-2 p-1 bg-white/20 hover:bg-white/40 rounded text-inherit opacity-0 group-hover:opacity-100 transition"
-                    >
-                        <Edit2 className="w-4 h-4" />
-                    </button>
+                     <div className="absolute top-2 right-2 flex gap-1">
+                        <button 
+                            onClick={(e) => { e.stopPropagation(); deleteSession(session.id); }}
+                            className="p-1 bg-white/20 hover:bg-red-500 hover:text-white rounded text-inherit opacity-0 group-hover:opacity-100 transition"
+                            title="Eliminar Treino"
+                        >
+                            <Trash2 className="w-4 h-4" />
+                        </button>
+                        <button 
+                            onClick={(e) => { e.stopPropagation(); openSessionModal(session); }}
+                            className="p-1 bg-white/20 hover:bg-white/40 rounded text-inherit opacity-0 group-hover:opacity-100 transition"
+                            title="Editar"
+                        >
+                            <Edit2 className="w-4 h-4" />
+                        </button>
+                    </div>
 
                     <div className="font-bold flex justify-between">
                       <span>{session.date}</span>
