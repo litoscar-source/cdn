@@ -210,7 +210,8 @@ const App: React.FC = () => {
   // --- Helper: Visible Squads for Current User ---
   const visibleSquads = useMemo(() => {
     if (!currentUser) return [];
-    if (currentUser.role === UserRole.ADMIN) return squads;
+    // SECURITY FIX: Explicit check for 'admin' username to ensure access even if Role string mismatch in DB
+    if (currentUser.role === UserRole.ADMIN || currentUser.username === 'admin') return squads;
     if (!currentUser.allowedSquads || currentUser.allowedSquads.length === 0) return [];
     return squads.filter(s => currentUser.allowedSquads?.includes(s.id));
   }, [squads, currentUser]);
@@ -1548,6 +1549,293 @@ const App: React.FC = () => {
                  </div>
                 )}
             </div>
+        </div>
+      )}
+
+      {/* TRAINING VIEW */}
+      {currentView === 'TRAINING' && (
+        <div className="space-y-6">
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            {/* List of Sessions */}
+            <div className="lg:col-span-1 space-y-4">
+              <div className="flex justify-between items-center">
+                 <h2 className="text-lg font-bold text-slate-800">Sessões</h2>
+                 <button 
+                  onClick={() => openSessionModal()}
+                  className="p-2 bg-emerald-100 text-emerald-700 rounded-lg hover:bg-emerald-200"
+                 >
+                   <Plus className="w-5 h-5" />
+                 </button>
+              </div>
+
+              {isSessionModalOpen && (
+                 <div className="bg-white p-4 rounded-lg shadow border border-emerald-100 mb-4 animate-in fade-in slide-in-from-top-2">
+                   <div className="space-y-3">
+                     <input type="date" className={inputClass} value={editingSession.date} onChange={e => setEditingSession({...editingSession, date: e.target.value})} />
+                     <input type="time" className={inputClass} value={editingSession.time} onChange={e => setEditingSession({...editingSession, time: e.target.value})} />
+                     <select className={inputClass} value={editingSession.squadId} onChange={e => setEditingSession({...editingSession, squadId: e.target.value})}>
+                       <option value="">Escalão...</option>
+                       {visibleSquads.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                     </select>
+                     <input placeholder="Descrição..." className={inputClass} value={editingSession.description} onChange={e => setEditingSession({...editingSession, description: e.target.value})} />
+                     <textarea placeholder="Observações do treino..." rows={3} className={inputClass} value={editingSession.notes || ''} onChange={e => setEditingSession({...editingSession, notes: e.target.value})} />
+                     <div className="flex gap-2">
+                        <button onClick={() => setIsSessionModalOpen(false)} className="flex-1 py-2 bg-slate-100 text-slate-600 rounded">Cancelar</button>
+                        <button onClick={saveSession} className="flex-1 py-2 bg-emerald-600 text-white rounded hover:bg-emerald-700">Guardar</button>
+                     </div>
+                   </div>
+                </div>
+              )}
+
+              <div className="space-y-2 max-h-[500px] overflow-y-auto">
+                {sessions
+                  .filter(s => visibleSquads.map(sq=>sq.id).includes(s.squadId))
+                  .sort((a,b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+                  .map(session => (
+                  <div 
+                    key={session.id}
+                    onClick={() => setSelectedSessionId(session.id)}
+                    className={`p-4 rounded-lg cursor-pointer transition border relative group ${
+                      selectedSessionId === session.id 
+                        ? 'bg-emerald-600 text-white border-emerald-600 shadow-md' 
+                        : 'bg-white hover:bg-slate-50 border-slate-200 text-slate-700'
+                    }`}
+                  >
+                     <div className="absolute top-2 right-2 flex gap-1">
+                        <button 
+                            onClick={(e) => { e.stopPropagation(); deleteSession(session.id); }}
+                            className="p-1 bg-white/20 hover:bg-red-500 hover:text-white rounded text-inherit opacity-0 group-hover:opacity-100 transition"
+                            title="Eliminar Treino"
+                        >
+                            <Trash2 className="w-4 h-4" />
+                        </button>
+                        <button 
+                            onClick={(e) => { e.stopPropagation(); openSessionModal(session); }}
+                            className="p-1 bg-white/20 hover:bg-white/40 rounded text-inherit opacity-0 group-hover:opacity-100 transition"
+                            title="Editar"
+                        >
+                            <Edit2 className="w-4 h-4" />
+                        </button>
+                    </div>
+
+                    <div className="font-bold flex justify-between">
+                      <span>{session.date}</span>
+                      <span className={`text-xs px-2 py-0.5 rounded ${selectedSessionId === session.id ? 'bg-emerald-500' : 'bg-slate-100 text-slate-500'}`}>
+                        {squads.find(s => s.id === session.squadId)?.name}
+                      </span>
+                    </div>
+                    <div className="text-sm mt-1 opacity-90">{session.time} - {session.description}</div>
+                  </div>
+                ))}
+                {sessions.filter(s => visibleSquads.map(sq=>sq.id).includes(s.squadId)).length === 0 && (
+                     <div className="text-center p-8 text-slate-400 italic">
+                         Sem treinos agendados.
+                     </div>
+                )}
+              </div>
+            </div>
+
+            {/* Attendance Sheet */}
+            <div className="lg:col-span-2">
+               {selectedSessionId ? (
+                 <div className="bg-white rounded-xl shadow-sm border border-slate-200 h-full flex flex-col">
+                   <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50 rounded-t-xl">
+                      <div className="flex items-center">
+                          <h3 className="font-bold text-slate-700 flex items-center mr-3">
+                            <UserCircle className="w-5 h-5 mr-2 text-emerald-600" />
+                            Registo de Presenças
+                          </h3>
+                          <div className="text-xs text-slate-500">
+                            {sessions.find(s => s.id === selectedSessionId)?.date}
+                          </div>
+                      </div>
+                      <button onClick={() => downloadTrainingPDF(selectedSessionId)} className="text-emerald-600 hover:bg-emerald-50 p-2 rounded flex items-center text-xs font-bold">
+                          <FileDown className="w-4 h-4 mr-1" /> PDF
+                      </button>
+                   </div>
+                   
+                   <div className="p-2 md:p-4 overflow-y-auto flex-1">
+                      {players
+                        .filter(p => p.squadId === sessions.find(s => s.id === selectedSessionId)?.squadId)
+                        .map(player => {
+                          const status = getAttendanceStatus(player.id, selectedSessionId);
+                          return (
+                            <div key={player.id} className="flex flex-col sm:flex-row sm:items-center justify-between py-3 border-b border-slate-50 last:border-0 hover:bg-slate-50 px-2 rounded">
+                               <div className="flex items-center mb-2 sm:mb-0">
+                                 <div className="w-8 h-8 rounded-full bg-slate-200 flex items-center justify-center text-xs font-bold text-slate-600 mr-3">
+                                   {player.jerseyNumber}
+                                 </div>
+                                 <div>
+                                   <div className="font-medium text-slate-800">{player.name}</div>
+                                 </div>
+                               </div>
+                               <div className="flex space-x-1 justify-end">
+                                  {[
+                                    { s: AttendanceStatus.PRESENT, icon: Check, color: 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200', active: 'bg-emerald-600 text-white' },
+                                    { s: AttendanceStatus.ABSENT, icon: XIcon, color: 'bg-red-100 text-red-700 hover:bg-red-200', active: 'bg-red-600 text-white' },
+                                    { s: AttendanceStatus.LATE, icon: Clock, color: 'bg-yellow-100 text-yellow-700 hover:bg-yellow-200', active: 'bg-yellow-600 text-white' },
+                                    { s: AttendanceStatus.INJURED, icon: AlertCircle, color: 'bg-orange-100 text-orange-700 hover:bg-orange-200', active: 'bg-orange-600 text-white' },
+                                  ].map((opt) => (
+                                    <button
+                                      key={opt.s}
+                                      onClick={() => toggleAttendance(player.id, selectedSessionId, opt.s)}
+                                      className={`p-3 sm:p-2 rounded-lg transition flex-1 sm:flex-none justify-center items-center flex ${status === opt.s ? opt.active : opt.color}`}
+                                      title={opt.s}
+                                    >
+                                      <opt.icon className="w-5 h-5 sm:w-4 sm:h-4" />
+                                    </button>
+                                  ))}
+                               </div>
+                            </div>
+                          );
+                        })}
+                   </div>
+                 </div>
+               ) : (
+                 <div className="h-[200px] lg:h-full flex flex-col items-center justify-center text-slate-400 border-2 border-dashed border-slate-200 rounded-xl bg-slate-50">
+                    <CalendarDays className="w-12 h-12 mb-2 opacity-50" />
+                    <p>Selecione um treino</p>
+                 </div>
+               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ADMIN VIEW - Protected by Role Check */}
+      {currentView === 'ADMIN' && (currentUser?.role === UserRole.ADMIN || currentUser?.username === 'admin') && (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+           {/* Squad Management */}
+           <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
+              <h3 className="text-xl font-bold text-slate-800 mb-6 flex items-center">
+                <Filter className="w-5 h-5 mr-2" /> Gestão de Escalões
+              </h3>
+              
+              <div className="flex gap-2 mb-6">
+                <input 
+                  placeholder="Novo escalão (ex: Sub-13)..." 
+                  className={`flex-1 ${inputClass}`}
+                  value={newSquadName}
+                  onChange={(e) => setNewSquadName(e.target.value)}
+                />
+                <button onClick={addSquad} className="px-4 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700"><Plus/></button>
+              </div>
+
+              <ul className="space-y-2">
+                {squads.map(s => (
+                  <li key={s.id} className="flex justify-between p-3 bg-slate-50 rounded-lg border border-slate-100 items-center">
+                    <span className="font-medium text-slate-700">{s.name}</span>
+                    <div className="flex items-center gap-2">
+                        <span className="text-xs bg-slate-200 px-2 py-1 rounded text-slate-500">{players.filter(p => p.squadId === s.id).length} atletas</span>
+                        <button onClick={() => deleteSquad(s.id)} className="text-red-400 hover:text-red-600 p-1"><Trash2 className="w-4 h-4"/></button>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+           </div>
+
+           {/* User Management */}
+           <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
+              <h3 className="text-xl font-bold text-slate-800 mb-6 flex items-center">
+                <UserPlus className="w-5 h-5 mr-2" /> Gestão de Utilizadores
+              </h3>
+              
+              <div className="space-y-3 mb-6 bg-slate-50 p-4 rounded-lg border border-slate-100">
+                <h4 className="text-sm font-bold text-slate-500 uppercase flex justify-between">
+                    {newUser.id ? `Editar Utilizador` : 'Adicionar Novo'}
+                    {newUser.id && (
+                        <button onClick={cancelEditUser} className="text-xs text-red-500 flex items-center hover:underline">
+                            <XIcon className="w-3 h-3 mr-1" /> Cancelar
+                        </button>
+                    )}
+                </h4>
+                <input 
+                  placeholder="Nome" 
+                  className={inputClass}
+                  value={newUser.name}
+                  onChange={e => setNewUser({...newUser, name: e.target.value})}
+                />
+                <input 
+                  placeholder="Username (Login)" 
+                  className={inputClass}
+                  value={newUser.username}
+                  onChange={e => setNewUser({...newUser, username: e.target.value})}
+                  disabled={!!newUser.id && newUser.username === 'admin'} // Protect admin username
+                />
+                 <input 
+                  type="text"
+                  placeholder={newUser.id ? "Nova Password (deixe em branco para manter)" : "Password"} 
+                  className={inputClass}
+                  value={newUser.password}
+                  onChange={e => setNewUser({...newUser, password: e.target.value})}
+                />
+                <select 
+                  className={inputClass}
+                  value={newUser.role}
+                  onChange={e => setNewUser({...newUser, role: e.target.value as UserRole})}
+                  disabled={newUser.username === 'admin'} // Cannot demote main admin
+                >
+                  <option value={UserRole.ADMIN}>Administrador</option>
+                  <option value={UserRole.COACH}>Treinador</option>
+                  <option value={UserRole.STAFF}>Staff</option>
+                </select>
+
+                {(newUser.role === UserRole.COACH || newUser.role === UserRole.STAFF) && (
+                   <div className="p-2 bg-white border rounded">
+                      <p className="text-xs font-semibold mb-2">Acesso a Escalões:</p>
+                      <div className="grid grid-cols-2 gap-2">
+                        {squads.map(s => (
+                          <label key={s.id} className="flex items-center text-sm">
+                             <input 
+                               type="checkbox" 
+                               className="mr-2"
+                               checked={newUser.allowedSquads?.includes(s.id)}
+                               onChange={() => handleUserSquadChange(s.id)}
+                             />
+                             {s.name}
+                          </label>
+                        ))}
+                      </div>
+                   </div>
+                )}
+
+                <button onClick={saveUser} className="w-full py-2 bg-slate-800 text-white rounded hover:bg-slate-900 font-medium">
+                    {newUser.id ? 'Atualizar Utilizador' : 'Adicionar Utilizador'}
+                </button>
+              </div>
+
+              <div className="space-y-2">
+                 {users.map(u => (
+                   <div key={u.id} className="p-3 border rounded-lg flex justify-between items-center group">
+                      <div>
+                        <div className="font-bold text-slate-800 flex items-center gap-2">
+                            {u.name}
+                            {u.username === 'admin' && <Shield className="w-3 h-3 text-emerald-600" />}
+                        </div>
+                        <div className="text-xs text-slate-500">@{u.username}</div>
+                        {u.role !== UserRole.ADMIN && u.allowedSquads && u.allowedSquads.length > 0 && (
+                          <div className="text-xs text-emerald-600 mt-1">
+                             Gere: {squads.filter(s => u.allowedSquads?.includes(s.id)).map(s => s.name).join(', ')}
+                          </div>
+                        )}
+                      </div>
+                      <div className="flex flex-col items-end gap-1">
+                        <span className="px-2 py-1 bg-slate-100 text-slate-600 text-xs font-semibold rounded">{u.role}</span>
+                        <div className="flex gap-2 mt-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                            <button onClick={() => startEditUser(u)} className="text-xs text-blue-500 hover:text-blue-700 flex items-center">
+                                <Edit2 className="w-3 h-3 mr-1"/> Editar
+                            </button>
+                            {u.username !== 'admin' && (
+                                <button onClick={() => deleteUser(u.id)} className="text-xs text-red-500 hover:text-red-700 flex items-center">
+                                    <Trash2 className="w-3 h-3 mr-1"/> Eliminar
+                                </button>
+                            )}
+                        </div>
+                      </div>
+                   </div>
+                 ))}
+              </div>
+           </div>
         </div>
       )}
 

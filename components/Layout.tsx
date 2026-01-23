@@ -25,8 +25,8 @@ const Layout: React.FC<LayoutProps> = ({ user, currentView, onNavigate, onLogout
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
   const NavItem = ({ view, icon: Icon, label }: { view: ViewState; icon: any; label: string }) => {
-    // Hide Admin tab if not admin
-    if (view === 'ADMIN' && user.role !== UserRole.ADMIN) return null;
+    // Hide Admin tab if not admin (Explicit username check added for fallback safety)
+    if (view === 'ADMIN' && user.role !== UserRole.ADMIN && user.username !== 'admin') return null;
 
     const isActive = currentView === view;
     return (
@@ -63,7 +63,7 @@ const Layout: React.FC<LayoutProps> = ({ user, currentView, onNavigate, onLogout
             <NavItem view="TRAINING" icon={CalendarDays} label="Treinos" />
             <NavItem view="MATCHES" icon={Flag} label="Jogos & Convocatórias" />
             
-            {user.role === UserRole.ADMIN && (
+            {(user.role === UserRole.ADMIN || user.username === 'admin') && (
                <>
                 <div className="mt-6 mb-2 border-t border-slate-800"></div>
                 <p className="px-4 text-xs font-semibold text-slate-500 uppercase mb-2">Administração</p>
@@ -112,7 +112,7 @@ const Layout: React.FC<LayoutProps> = ({ user, currentView, onNavigate, onLogout
             <NavItem view="PLAYERS" icon={Users} label="Atletas" />
             <NavItem view="TRAINING" icon={CalendarDays} label="Treinos" />
             <NavItem view="MATCHES" icon={Flag} label="Jogos" />
-            {user.role === UserRole.ADMIN && (
+            {(user.role === UserRole.ADMIN || user.username === 'admin') && (
                 <NavItem view="ADMIN" icon={Settings} label="Definições" />
             )}
             <div className="border-t border-slate-800 my-4 pt-4">
