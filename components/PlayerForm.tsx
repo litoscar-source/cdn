@@ -55,13 +55,13 @@ const PlayerForm: React.FC<PlayerFormProps> = ({ player, squads, matches = [], o
     let totalMinutes = 0;
     
     const matchHistory = matches
-        .filter(m => m.convokedIds.includes(player.id))
+        .filter(m => m.convokedIds?.includes(player.id))
         .sort((a,b) => new Date(b.date).getTime() - new Date(a.date).getTime())
         .map(m => {
             const minutes = m.gameData?.playerMinutes?.[player.id] || 0;
             const wasStarter = m.gameData?.startingXI 
                 ? m.gameData.startingXI.includes(player.id)
-                : m.gameData?.starters.includes(player.id);
+                : m.gameData?.starters?.includes(player.id);
             
             return {
                 id: m.id,
