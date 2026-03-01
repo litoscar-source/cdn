@@ -8,7 +8,7 @@ import { CLUB_NAME } from './constants';
 import Layout from './components/Layout';
 import PlayerForm from './components/PlayerForm';
 import { 
-  Plus, Search, Filter, Trash2, Edit2, Check, X as XIcon, AlertCircle, Clock, UserPlus, UserCircle, CalendarDays, Flag, Copy, FileDown, Loader2, Play, Pause, Shirt, Shield, ArrowRightLeft, FileText, Maximize2, Minimize2, UserCheck, Printer, Trophy, Minus, PlusCircle, ChevronLeft, Settings, Upload
+  Plus, Search, Filter, Trash2, Edit2, Check, X as XIcon, AlertCircle, Clock, UserPlus, UserCircle, CalendarDays, Flag, Copy, FileDown, Loader2, Play, Pause, Shirt, Shield, ArrowRightLeft, FileText, Maximize2, Minimize2, UserCheck, Printer, Trophy, Minus, PlusCircle, ChevronLeft, Settings as SettingsIcon, Upload
 } from 'lucide-react';
 
 const App: React.FC = () => {
@@ -87,11 +87,18 @@ const App: React.FC = () => {
   };
 
   useEffect(() => {
+    const handleVisibilityChange = () => {
+        if (document.visibilityState === 'visible' && selectedMatchId && matches.find(m => m.id === selectedMatchId)?.gameData?.isTimerRunning) {
+            requestWakeLock();
+        }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);
       releaseWakeLock();
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
-  }, []);
+  }, [selectedMatchId, matches]);
 
   // Timer Tick
   useEffect(() => {
@@ -119,19 +126,9 @@ const App: React.FC = () => {
                              const newTimer = m.gameData.timer + deltaSeconds;
                              
                              // Update Minutes Played logic
-                             // We need to distribute these deltaSeconds to players
-                             // To avoid partial minutes floating, we accumulate seconds or just update every 60s boundary
-                             // Simple approach: Update minutes based on total timer
-                             // But players might sub in/out. 
-                             // Better: Accumulate seconds for each player on field.
-                             // However, existing logic was: "Update Minutes Played every 60s".
-                             // Let's stick to that but make it robust.
-                             
                              const newPlayerMinutes = { ...m.gameData.playerMinutes };
                              
                              // Check if we crossed a minute boundary
-                             // Previous total minutes = floor(oldTimer / 60)
-                             // New total minutes = floor(newTimer / 60)
                              const oldTotalMin = Math.floor(m.gameData.timer / 60);
                              const newTotalMin = Math.floor(newTimer / 60);
                              
@@ -167,6 +164,20 @@ const App: React.FC = () => {
       }
     }
   }, [selectedMatchId, matches]);
+
+  const toggleFullscreen = () => {
+    if (!document.fullscreenElement) {
+        document.documentElement.requestFullscreen().catch((e) => {
+            console.error(`Error attempting to enable fullscreen mode: ${e.message} (${e.name})`);
+        });
+        setIsLiveGameFullscreen(true);
+    } else {
+        if (document.exitFullscreen) {
+            document.exitFullscreen();
+            setIsLiveGameFullscreen(false);
+        }
+    }
+  };
 
   // Initial Load & Admin Check
   useEffect(() => {
@@ -491,7 +502,7 @@ const App: React.FC = () => {
       }
   };
 
-  const updateMatchGameData = async (matchId: string, data: Partial<MatchData>) => {
+  const updateMatchGameData = async (matchId: string, data: Partial<MatchData>, persist: boolean = true) => {
       let matchToUpdate: Match | undefined;
       const updatedMatches = matches.map(m => {
           if (m.id === matchId) {
@@ -513,7 +524,7 @@ const App: React.FC = () => {
           return m;
       });
       setMatches(updatedMatches);
-      if(matchToUpdate) await storageService.saveMatches([matchToUpdate]);
+      if(matchToUpdate && persist) await storageService.saveMatches([matchToUpdate]);
   };
 
   const toggleConvocation = async (matchId: string, playerId: string) => {
@@ -602,13 +613,21 @@ const App: React.FC = () => {
            const currentPositions = match.gameData?.playerPositions || {};
            updateMatchGameData(selectedMatchId, {
                playerPositions: { ...currentPositions, [draggingPlayerId]: { x, y } }
-           });
+           }, false); // Don't persist on every move
       }
   };
 
-  const handlePointerUp = (e: React.PointerEvent) => {
+  const handlePointerUp = async (e: React.PointerEvent) => {
       setDraggingPlayerId(null);
       e.currentTarget.releasePointerCapture(e.pointerId);
+      
+      // Persist the final state
+      if (selectedMatchId) {
+          const match = matches.find(m => m.id === selectedMatchId);
+          if (match) {
+              await storageService.saveMatches([match]);
+          }
+      }
   };
 
   // Also support click-to-place for non-drag interaction
@@ -1461,6 +1480,10 @@ const App: React.FC = () => {
                                            <div className="absolute top-1/2 left-0 w-full h-0.5 bg-white/40 -translate-y-1/2 pointer-events-none"></div>
                                            <div className="absolute top-1/2 left-1/2 w-32 h-32 border-2 border-white/40 rounded-full -translate-x-1/2 -translate-y-1/2 pointer-events-none"></div>
                                            
+                                           {/* Goals */}
+                                           <div className="absolute top-1/2 -left-1 w-8 h-24 border-2 border-white/40 bg-transparent -translate-y-1/2 pointer-events-none"></div>
+                                           <div className="absolute top-1/2 -right-1 w-8 h-24 border-2 border-white/40 bg-transparent -translate-y-1/2 pointer-events-none"></div>
+
                                            {/* Players on Field */}
                                            {matches.find(m => m.id === selectedMatchId)?.gameData?.starters?.map(playerId => {
                                                const player = players.find(p => p.id === playerId);
@@ -1509,7 +1532,7 @@ const App: React.FC = () => {
                                   <div className="bg-slate-900 text-white md:rounded-xl shadow-lg flex flex-col shrink-0 overflow-hidden relative">
                                       {/* Floating Fullscreen Button */}
                                       <button 
-                                        onClick={() => setIsLiveGameFullscreen(!isLiveGameFullscreen)} 
+                                        onClick={toggleFullscreen} 
                                         className="absolute top-2 right-2 p-2 bg-white/10 hover:bg-white/20 rounded-full text-white z-10"
                                         title={isLiveGameFullscreen ? "Sair de Ecrã Inteiro" : "Ecrã Inteiro"}
                                       >
@@ -1927,7 +1950,7 @@ const App: React.FC = () => {
            {/* Club Settings */}
            <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200 md:col-span-2">
               <h3 className="text-xl font-bold text-slate-800 mb-4 flex items-center">
-                <Settings className="w-5 h-5 mr-2" /> Definições do Clube
+                <SettingsIcon className="w-5 h-5 mr-2" /> Definições do Clube
               </h3>
               <div className="flex flex-col sm:flex-row gap-4 sm:items-end">
                   <div className="flex-1">
