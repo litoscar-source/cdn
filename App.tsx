@@ -66,7 +66,7 @@ const App: React.FC = () => {
   // Wake Lock Management
   const requestWakeLock = async () => {
     try {
-      if ('wakeLock' in navigator) {
+      if ('wakeLock' in navigator && !wakeLockRef.current) {
         wakeLockRef.current = await navigator.wakeLock.request('screen');
       }
     } catch (err: any) {
@@ -81,50 +81,57 @@ const App: React.FC = () => {
 
   const releaseWakeLock = async () => {
     if (wakeLockRef.current) {
-      await wakeLockRef.current.release();
+      try {
+        await wakeLockRef.current.release();
+      } catch (e) { /* ignore */ }
       wakeLockRef.current = null;
     }
   };
 
+  // Derived state for timer
+  const activeMatch = useMemo(() => matches.find(m => m.id === selectedMatchId), [matches, selectedMatchId]);
+  const isTimerRunning = activeMatch?.gameData?.isTimerRunning && 
+                         (activeMatch?.gameData?.currentPeriod === '1H' || activeMatch?.gameData?.currentPeriod === '2H');
+
   useEffect(() => {
     const handleVisibilityChange = () => {
-        if (document.visibilityState === 'visible' && selectedMatchId && matches.find(m => m.id === selectedMatchId)?.gameData?.isTimerRunning) {
+        if (document.visibilityState === 'visible' && isTimerRunning) {
             requestWakeLock();
         }
     };
     document.addEventListener('visibilitychange', handleVisibilityChange);
     return () => {
-      if (timerRef.current) clearInterval(timerRef.current);
-      releaseWakeLock();
       document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
-  }, [selectedMatchId, matches]);
+  }, [isTimerRunning]);
 
   // Timer Tick
   useEffect(() => {
-    if (selectedMatchId && matches.length > 0) {
-      const match = matches.find(m => m.id === selectedMatchId);
-      
-      // Only tick if period is active AND timer is running
-      if (match?.gameData?.isTimerRunning && (match.gameData.currentPeriod === '1H' || match.gameData.currentPeriod === '2H')) {
-          // Request Wake Lock if not active
-          if (!wakeLockRef.current) requestWakeLock();
+    if (isTimerRunning) {
+        // Request Wake Lock if not active
+        if (!wakeLockRef.current) requestWakeLock();
 
-          if (!timerRef.current) {
+        if (!timerRef.current) {
+            // Run more frequently to avoid visual stutter
             timerRef.current = setInterval(() => {
                 setMatches(prevMatches => {
-                    return prevMatches.map(m => {
+                    let hasChanges = false;
+                    const newMatches = prevMatches.map(m => {
                         if (m.id === selectedMatchId && m.gameData?.isTimerRunning) {
                              const now = Date.now();
-                             // Use lastUpdateTimestamp if available, otherwise fallback to 1s increment (first tick)
                              const lastUpdate = m.gameData.lastUpdateTimestamp || (now - 1000);
-                             const deltaSeconds = Math.floor((now - lastUpdate) / 1000);
+                             const deltaMs = now - lastUpdate;
                              
-                             // If delta is 0 (too fast), skip update to avoid jitter, unless it's been a while
-                             if (deltaSeconds < 1) return m;
+                             // Only update if at least 1 second has passed
+                             if (deltaMs < 1000) return m;
 
+                             const deltaSeconds = Math.floor(deltaMs / 1000);
                              const newTimer = m.gameData.timer + deltaSeconds;
                              
+                             // Preserve the remainder milliseconds to prevent time drift
+                             const remainder = deltaMs % 1000;
+                             const newLastUpdate = now - remainder;
+
                              // Update Minutes Played logic
                              const newPlayerMinutes = { ...m.gameData.playerMinutes };
                              
@@ -139,31 +146,42 @@ const App: React.FC = () => {
                                  });
                              }
                              
+                             hasChanges = true;
                              return {
                                  ...m,
                                  gameData: {
                                      ...m.gameData,
                                      timer: newTimer,
-                                     lastUpdateTimestamp: now,
+                                     lastUpdateTimestamp: newLastUpdate,
                                      playerMinutes: newPlayerMinutes
                                  }
                              };
                         }
                         return m;
                     });
+                    
+                    // Only trigger re-render if state actually changed
+                    return hasChanges ? newMatches : prevMatches;
                 });
-            }, 1000); 
-          }
-      } else {
-          // Stop Timer & Release Lock
-          if (timerRef.current) {
-              clearInterval(timerRef.current);
-              timerRef.current = null;
-          }
-          releaseWakeLock();
-      }
+            }, 200); 
+        }
+    } else {
+        // Stop Timer & Release Lock
+        if (timerRef.current) {
+            clearInterval(timerRef.current);
+            timerRef.current = null;
+        }
+        releaseWakeLock();
     }
-  }, [selectedMatchId, matches]);
+
+    return () => {
+        if (timerRef.current) {
+            clearInterval(timerRef.current);
+            timerRef.current = null;
+        }
+        releaseWakeLock();
+    };
+  }, [isTimerRunning, selectedMatchId]);
 
   const toggleFullscreen = () => {
     if (!document.fullscreenElement) {
