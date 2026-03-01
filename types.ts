@@ -89,6 +89,7 @@ export interface MatchData {
   currentPeriod: 'PRE' | '1H' | 'HT' | '2H' | 'FT';
   timer: number; // Current second of the match
   isTimerRunning: boolean; // Controls if the timer is ticking
+  lastUpdateTimestamp?: number; // For robust time tracking
   // NEW: Coordinates for tactics board
   playerPositions: Record<string, {x: number, y: number}>; // x, y in percentages (0-100)
 }
@@ -107,6 +108,10 @@ export interface Match {
   playerKit?: string;
   goalkeeperKit?: string;
   gameData?: MatchData; // Stores the live game state
+}
+
+export interface ClubSettings {
+  logoUrl?: string;
 }
 
 export type ViewState = 'DASHBOARD' | 'PLAYERS' | 'TRAINING' | 'MATCHES' | 'ADMIN';

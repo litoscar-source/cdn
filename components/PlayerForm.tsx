@@ -100,8 +100,8 @@ const PlayerForm: React.FC<PlayerFormProps> = ({ player, squads, matches = [], o
     }
     
     const newPlayer: Player = {
-      id: player?.id || crypto.randomUUID(),
       ...formData as Player,
+      id: player?.id || crypto.randomUUID(),
       jerseyNumber: Number(formData.jerseyNumber)
     };
     onSave(newPlayer);
@@ -370,8 +370,8 @@ const PlayerForm: React.FC<PlayerFormProps> = ({ player, squads, matches = [], o
                     </div>
                 </div>
 
-                <div className="border rounded-lg overflow-hidden">
-                    <table className="w-full text-sm text-left">
+                <div className="border rounded-lg overflow-hidden overflow-x-auto">
+                    <table className="w-full text-sm text-left min-w-[400px]">
                         <thead className="bg-slate-100 text-slate-600 border-b">
                             <tr>
                                 <th className="p-3">Data</th>

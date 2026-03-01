@@ -4,11 +4,11 @@ import {
 } from './types';
 import { storageService } from './services/storageService';
 import { generateConvocationPDF, generateMatchSheetPDF, generateTrainingSessionPDF } from './services/pdfService';
-import { CLUB_NAME, CLUB_LOGO_URL } from './constants';
+import { CLUB_NAME } from './constants';
 import Layout from './components/Layout';
 import PlayerForm from './components/PlayerForm';
 import { 
-  Plus, Search, Filter, Trash2, Edit2, Check, X as XIcon, AlertCircle, Clock, Save, UserPlus, Users, UserCircle, CalendarDays, KeyRound, Flag, Copy, FileDown, Loader2, Play, Pause, Square, Shirt, Shield, ArrowRightLeft, FileText, Move, Maximize2, Minimize2, UserMinus, UserCheck, Printer, RefreshCcw, Trophy, Minus, PlusCircle, RotateCcw, Smartphone
+  Plus, Search, Filter, Trash2, Edit2, Check, X as XIcon, AlertCircle, Clock, UserPlus, UserCircle, CalendarDays, Flag, Copy, FileDown, Loader2, Play, Pause, Shirt, Shield, ArrowRightLeft, FileText, Maximize2, Minimize2, UserCheck, Printer, Trophy, Minus, PlusCircle, ChevronLeft, Settings, Upload
 } from 'lucide-react';
 
 const App: React.FC = () => {
@@ -55,13 +55,41 @@ const App: React.FC = () => {
   const [isLiveGameFullscreen, setIsLiveGameFullscreen] = useState(false);
   const [draggingPlayerId, setDraggingPlayerId] = useState<string | null>(null);
   const fieldRef = useRef<HTMLDivElement>(null);
+  
+  // Club Settings
+  const [clubLogoUrl, setClubLogoUrl] = useState<string>('');
 
   // --- TIMER LOGIC ---
   const timerRef = useRef<any>(null);
+  const wakeLockRef = useRef<WakeLockSentinel | null>(null);
+
+  // Wake Lock Management
+  const requestWakeLock = async () => {
+    try {
+      if ('wakeLock' in navigator) {
+        wakeLockRef.current = await navigator.wakeLock.request('screen');
+      }
+    } catch (err: any) {
+      // Ignore if not allowed by policy
+      if (err.name === 'NotAllowedError' || err.message.includes('permissions policy')) {
+        console.warn('Wake Lock not available in this environment.');
+      } else {
+        console.error('Wake Lock error:', err);
+      }
+    }
+  };
+
+  const releaseWakeLock = async () => {
+    if (wakeLockRef.current) {
+      await wakeLockRef.current.release();
+      wakeLockRef.current = null;
+    }
+  };
 
   useEffect(() => {
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);
+      releaseWakeLock();
     };
   }, []);
 
@@ -72,20 +100,45 @@ const App: React.FC = () => {
       
       // Only tick if period is active AND timer is running
       if (match?.gameData?.isTimerRunning && (match.gameData.currentPeriod === '1H' || match.gameData.currentPeriod === '2H')) {
+          // Request Wake Lock if not active
+          if (!wakeLockRef.current) requestWakeLock();
+
           if (!timerRef.current) {
             timerRef.current = setInterval(() => {
                 setMatches(prevMatches => {
                     return prevMatches.map(m => {
                         if (m.id === selectedMatchId && m.gameData?.isTimerRunning) {
-                             const newTimer = m.gameData.timer + 1;
+                             const now = Date.now();
+                             // Use lastUpdateTimestamp if available, otherwise fallback to 1s increment (first tick)
+                             const lastUpdate = m.gameData.lastUpdateTimestamp || (now - 1000);
+                             const deltaSeconds = Math.floor((now - lastUpdate) / 1000);
                              
-                             // Update Minutes Played every 60s
+                             // If delta is 0 (too fast), skip update to avoid jitter, unless it's been a while
+                             if (deltaSeconds < 1) return m;
+
+                             const newTimer = m.gameData.timer + deltaSeconds;
+                             
+                             // Update Minutes Played logic
+                             // We need to distribute these deltaSeconds to players
+                             // To avoid partial minutes floating, we accumulate seconds or just update every 60s boundary
+                             // Simple approach: Update minutes based on total timer
+                             // But players might sub in/out. 
+                             // Better: Accumulate seconds for each player on field.
+                             // However, existing logic was: "Update Minutes Played every 60s".
+                             // Let's stick to that but make it robust.
+                             
                              const newPlayerMinutes = { ...m.gameData.playerMinutes };
                              
-                             // We update minute count every 60 seconds of game time
-                             if (newTimer > 0 && newTimer % 60 === 0) {
+                             // Check if we crossed a minute boundary
+                             // Previous total minutes = floor(oldTimer / 60)
+                             // New total minutes = floor(newTimer / 60)
+                             const oldTotalMin = Math.floor(m.gameData.timer / 60);
+                             const newTotalMin = Math.floor(newTimer / 60);
+                             
+                             if (newTotalMin > oldTotalMin) {
+                                 const minutesToAdd = newTotalMin - oldTotalMin;
                                  m.gameData.starters.forEach(pid => {
-                                     newPlayerMinutes[pid] = (newPlayerMinutes[pid] || 0) + 1;
+                                     newPlayerMinutes[pid] = (newPlayerMinutes[pid] || 0) + minutesToAdd;
                                  });
                              }
                              
@@ -94,6 +147,7 @@ const App: React.FC = () => {
                                  gameData: {
                                      ...m.gameData,
                                      timer: newTimer,
+                                     lastUpdateTimestamp: now,
                                      playerMinutes: newPlayerMinutes
                                  }
                              };
@@ -104,10 +158,12 @@ const App: React.FC = () => {
             }, 1000); 
           }
       } else {
+          // Stop Timer & Release Lock
           if (timerRef.current) {
               clearInterval(timerRef.current);
               timerRef.current = null;
           }
+          releaseWakeLock();
       }
     }
   }, [selectedMatchId, matches]);
@@ -116,6 +172,11 @@ const App: React.FC = () => {
   useEffect(() => {
     const init = async () => {
         setIsLoading(true);
+        
+        // Load Settings immediately (for Login Logo)
+        const settings = storageService.getClubSettings();
+        if (settings.logoUrl) setClubLogoUrl(settings.logoUrl);
+
         // We need to fetch users to display the login dropdown
         let loadedUsers = await storageService.getUsers();
         
@@ -126,11 +187,20 @@ const App: React.FC = () => {
                 name: 'Administrador',
                 username: 'admin',
                 role: UserRole.ADMIN,
-                password: '123',
+                password: '1212',
                 allowedSquads: []
             };
             await storageService.saveUsers([defaultAdmin]);
             loadedUsers = [defaultAdmin];
+        } else {
+            // Ensure Admin has correct password (migration for dev)
+            const adminUser = loadedUsers.find(u => u.username === 'admin');
+            if (adminUser && adminUser.password !== '1212') {
+                adminUser.password = '1212';
+                await storageService.saveUsers([adminUser]);
+                // Update local state
+                loadedUsers = loadedUsers.map(u => u.id === adminUser.id ? adminUser : u);
+            }
         }
 
         setUsers(loadedUsers);
@@ -170,6 +240,10 @@ const App: React.FC = () => {
     setSessions(sess);
     setAttendance(att);
     setMatches(m);
+
+    // Load Settings
+    const settings = storageService.getClubSettings();
+    if (settings.logoUrl) setClubLogoUrl(settings.logoUrl);
   };
 
   const handleLogin = async (e: React.FormEvent) => {
@@ -601,7 +675,16 @@ const App: React.FC = () => {
       const match = matches.find(m => m.id === matchId);
       if(!match) return;
       const isRunning = match.gameData?.isTimerRunning || false;
-      updateMatchGameData(matchId, { isTimerRunning: !isRunning });
+      
+      const updates: Partial<MatchData> = { isTimerRunning: !isRunning };
+      if (!isRunning) {
+          // Starting
+          updates.lastUpdateTimestamp = Date.now();
+      } else {
+          updates.lastUpdateTimestamp = undefined;
+      }
+
+      updateMatchGameData(matchId, updates);
   };
 
   const setGamePeriod = (matchId: string, period: MatchData['currentPeriod']) => {
@@ -609,12 +692,12 @@ const App: React.FC = () => {
       if(!match) return;
 
       // Smart Logic: Stop timer on HT or FT, Reset timer on new periods
-      const shouldStop = period === 'HT' || period === 'FT';
       
       updateMatchGameData(matchId, { 
           currentPeriod: period, 
           isTimerRunning: false, 
-          timer: 0 
+          timer: 0,
+          lastUpdateTimestamp: undefined
       });
   };
 
@@ -699,7 +782,7 @@ const App: React.FC = () => {
     if (squad && convokedPlayers.length > 0) {
       setIsGeneratingPdf(true);
       try {
-        await generateConvocationPDF(match, squad, convokedPlayers);
+        await generateConvocationPDF(match, squad, convokedPlayers, clubLogoUrl);
       } catch (e) {
         console.error(e);
         alert("Erro ao gerar PDF.");
@@ -821,54 +904,117 @@ const App: React.FC = () => {
 
   // Common Input Class
   const inputClass = "w-full p-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 bg-white text-slate-900 placeholder-slate-400";
-  const loginInputClass = "w-full p-3 border border-slate-300 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none bg-white text-slate-900 placeholder-slate-400";
 
   // --- Render ---
 
   if (isLoginView) {
+    const handlePinClick = (digit: string) => {
+        if (loginPassword.length < 4) {
+            setLoginPassword(prev => prev + digit);
+        }
+    };
+
+    const handlePinBackspace = () => {
+        setLoginPassword(prev => prev.slice(0, -1));
+    };
+
+    const handlePinSubmit = (e: React.FormEvent) => {
+        e.preventDefault();
+        handleLogin(e);
+    };
+
     return (
-      <div className="min-h-screen bg-slate-900 flex items-center justify-center p-4">
-        <div className="bg-white rounded-2xl p-8 max-w-md w-full shadow-2xl">
-          <h1 className="text-xl font-bold text-center text-slate-800 mb-8">{CLUB_NAME}</h1>
-          <form onSubmit={handleLogin} className="space-y-4">
+      <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center p-4">
+        <div className="bg-white rounded-3xl p-6 max-w-sm w-full shadow-2xl flex flex-col items-center">
+          <div className="mb-6 text-center">
+              {clubLogoUrl ? (
+                  <div className="w-24 h-24 mx-auto mb-4 flex items-center justify-center">
+                      <img src={clubLogoUrl} alt="Logo" className="max-w-full max-h-full object-contain drop-shadow-md" />
+                  </div>
+              ) : (
+                  <div className="w-16 h-16 bg-emerald-100 rounded-full flex items-center justify-center mx-auto mb-3 text-emerald-600">
+                      <Shield className="w-8 h-8" />
+                  </div>
+              )}
+              <h1 className="text-xl font-bold text-slate-800">{CLUB_NAME}</h1>
+              <p className="text-slate-500 text-sm">Gestão de Equipa</p>
+          </div>
+
+          <form onSubmit={handlePinSubmit} className="w-full space-y-6">
             <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">Selecionar Utilizador</label>
+              <label className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-2 text-center">Quem és tu?</label>
               <select 
-                className={loginInputClass}
+                className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-center font-bold text-slate-800 focus:ring-2 focus:ring-emerald-500 outline-none appearance-none"
                 value={selectedLoginUserId}
                 onChange={(e) => {
                     setSelectedLoginUserId(e.target.value);
                     setLoginError('');
+                    setLoginPassword('');
                 }}
               >
-                <option value="">Selecione...</option>
+                <option value="">Selecionar Treinador...</option>
                 {users.map(u => (
-                    <option key={u.id} value={u.id}>{u.name} ({u.role})</option>
+                    <option key={u.id} value={u.id}>{u.name}</option>
                 ))}
               </select>
             </div>
 
-            <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">Password</label>
-              <input 
-                type="password"
-                className={loginInputClass}
-                value={loginPassword}
-                onChange={(e) => setLoginPassword(e.target.value)}
-                placeholder="Introduza a sua password"
-              />
-            </div>
+            {selectedLoginUserId && (
+                <div className="animate-in fade-in slide-in-from-bottom-4 duration-300">
+                    <div className="flex justify-center gap-4 mb-6">
+                        {[0, 1, 2, 3].map(i => (
+                            <div key={i} className={`w-4 h-4 rounded-full transition-all duration-300 ${loginPassword.length > i ? 'bg-emerald-500 scale-110' : 'bg-slate-200'}`} />
+                        ))}
+                    </div>
 
-            {loginError && (
-                <div className="p-3 bg-red-50 text-red-600 text-sm rounded-lg flex items-center">
-                    <AlertCircle className="w-4 h-4 mr-2" /> {loginError}
+                    <div className="grid grid-cols-3 gap-3 mb-6">
+                        {[1, 2, 3, 4, 5, 6, 7, 8, 9].map(num => (
+                            <button 
+                                key={num}
+                                type="button"
+                                onClick={() => handlePinClick(num.toString())}
+                                className="h-14 rounded-xl bg-slate-50 border-b-4 border-slate-200 active:border-b-0 active:translate-y-1 text-xl font-bold text-slate-700 hover:bg-slate-100 transition flex items-center justify-center"
+                            >
+                                {num}
+                            </button>
+                        ))}
+                        <div className="flex items-center justify-center">
+                             {/* Empty slot for alignment */}
+                        </div>
+                        <button 
+                            type="button"
+                            onClick={() => handlePinClick('0')}
+                            className="h-14 rounded-xl bg-slate-50 border-b-4 border-slate-200 active:border-b-0 active:translate-y-1 text-xl font-bold text-slate-700 hover:bg-slate-100 transition flex items-center justify-center"
+                        >
+                            0
+                        </button>
+                        <button 
+                            type="button"
+                            onClick={handlePinBackspace}
+                            className="h-14 rounded-xl bg-red-50 border-b-4 border-red-100 active:border-b-0 active:translate-y-1 text-red-500 hover:bg-red-100 transition flex items-center justify-center"
+                        >
+                            <Minus className="w-6 h-6" />
+                        </button>
+                    </div>
+
+                    {loginError && (
+                        <div className="p-3 bg-red-50 text-red-600 text-sm rounded-lg flex items-center justify-center mb-4 animate-pulse">
+                            <AlertCircle className="w-4 h-4 mr-2" /> {loginError}
+                        </div>
+                    )}
+                    
+                    <button 
+                        disabled={loginPassword.length < 1 || isLoading}
+                        className="w-full py-4 bg-emerald-600 text-white font-bold rounded-xl hover:bg-emerald-700 transition shadow-lg disabled:opacity-50 disabled:cursor-not-allowed flex justify-center items-center text-lg"
+                    >
+                      {isLoading ? <Loader2 className="w-6 h-6 animate-spin" /> : 'ENTRAR'}
+                    </button>
                 </div>
             )}
-            
-            <button className="w-full py-3 bg-emerald-600 text-white font-bold rounded-lg hover:bg-emerald-700 transition shadow-lg mt-4 flex justify-center items-center">
-              {isLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : 'Entrar'}
-            </button>
           </form>
+        </div>
+        <div className="mt-8 text-slate-500 text-xs opacity-50">
+            v2.0 Mobile Optimized
         </div>
       </div>
     );
@@ -899,7 +1045,7 @@ const App: React.FC = () => {
                <div className="space-y-3">
                  {sessions
                    .filter(s => visibleSquads.map(sq=>sq.id).includes(s.squadId))
-                   .sort((a,b) => new Date(a.date).getTime() - new Date(a.date).getTime())
+                   .sort((a,b) => new Date(a.date).getTime() - new Date(b.date).getTime())
                    .slice(0, 5)
                    .map(s => (
                    <div key={s.id} className="flex flex-col sm:flex-row sm:items-center justify-between p-4 bg-slate-50 rounded-lg border border-slate-100">
@@ -964,7 +1110,8 @@ const App: React.FC = () => {
               </div>
 
               <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
-                <div className="overflow-x-auto">
+                {/* Desktop Table View */}
+                <div className="hidden md:block overflow-x-auto">
                   <table className="w-full text-left">
                     <thead className="bg-slate-50 border-b border-slate-200">
                       <tr>
@@ -978,7 +1125,7 @@ const App: React.FC = () => {
                     </thead>
                     <tbody className="divide-y divide-slate-100">
                       {filteredPlayers.map(player => (
-                        <tr key={player.id} className="hover:bg-slate-50 transition">
+                        <tr key={player.id} className="hover:bg-slate-50 transition cursor-pointer" onClick={() => setEditingPlayer(player)}>
                            <td className="p-4 text-slate-500 font-mono">{player.jerseyNumber}</td>
                           <td className="p-4 flex items-center">
                             {player.photoUrl ? (
@@ -1002,7 +1149,7 @@ const App: React.FC = () => {
                           <td className="p-4 text-sm text-slate-600 hidden lg:table-cell">
                              {player.sportsDetails?.positions || '-'}
                           </td>
-                          <td className="p-4 text-right whitespace-nowrap">
+                          <td className="p-4 text-right whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
                             <button onClick={() => setEditingPlayer(player)} className="p-1 text-slate-400 hover:text-blue-600 transition inline-block"><Edit2 className="w-5 h-5"/></button>
                             <button onClick={() => deletePlayer(player.id)} className="p-1 text-slate-400 hover:text-red-600 transition ml-3 inline-block"><Trash2 className="w-5 h-5"/></button>
                           </td>
@@ -1016,6 +1163,45 @@ const App: React.FC = () => {
                     </tbody>
                   </table>
                 </div>
+
+                {/* Mobile Card View */}
+                <div className="md:hidden divide-y divide-slate-100">
+                    {filteredPlayers.map(player => (
+                        <div key={player.id} className="p-4 flex items-center justify-between hover:bg-slate-50 transition active:bg-slate-100 cursor-pointer" onClick={() => setEditingPlayer(player)}>
+                            <div className="flex items-center gap-3 overflow-hidden">
+                                <div className="relative shrink-0">
+                                     {player.photoUrl ? (
+                                        <img src={player.photoUrl} alt="" className="w-12 h-12 rounded-full object-cover border border-slate-200" />
+                                    ) : (
+                                        <div className="w-12 h-12 rounded-full bg-slate-100 flex items-center justify-center text-slate-400"><UserCircle className="w-8 h-8"/></div>
+                                    )}
+                                    <span className="absolute -bottom-1 -right-1 bg-slate-800 text-white text-[10px] font-bold w-5 h-5 flex items-center justify-center rounded-full border border-white">
+                                        {player.jerseyNumber}
+                                    </span>
+                                </div>
+                                <div className="min-w-0">
+                                    <div className="font-bold text-slate-800 truncate">{player.name}</div>
+                                    <div className="text-xs text-slate-500 flex items-center gap-2">
+                                         <span className="bg-emerald-50 text-emerald-700 px-1.5 py-0.5 rounded font-medium">{squads.find(s => s.id === player.squadId)?.name}</span>
+                                         <span>• {calculateAge(player.birthDate)} anos</span>
+                                    </div>
+                                </div>
+                            </div>
+                            <div className="flex items-center pl-2 shrink-0">
+                                <button 
+                                    onClick={(e) => { e.stopPropagation(); deletePlayer(player.id); }} 
+                                    className="p-2 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-full transition"
+                                >
+                                    <Trash2 className="w-5 h-5"/>
+                                </button>
+                                <ChevronLeft className="w-5 h-5 text-slate-300 rotate-180 ml-1" />
+                            </div>
+                        </div>
+                    ))}
+                    {filteredPlayers.length === 0 && (
+                         <div className="p-8 text-center text-slate-500 italic">Nenhum atleta encontrado.</div>
+                    )}
+                </div>
               </div>
             </div>
           )}
@@ -1025,7 +1211,7 @@ const App: React.FC = () => {
       {/* MATCHES VIEW */}
       {currentView === 'MATCHES' && (
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 h-[calc(100vh-140px)]">
-            <div className="lg:col-span-1 flex flex-col h-full space-y-4">
+            <div className={`lg:col-span-1 flex flex-col h-full space-y-4 ${selectedMatchId ? 'hidden lg:flex' : 'flex'}`}>
                  <div className="flex justify-between items-center">
                  <h2 className="text-lg font-bold text-slate-800">Jogos</h2>
                  <button 
@@ -1121,32 +1307,39 @@ const App: React.FC = () => {
               </div>
             </div>
 
-            <div className="lg:col-span-2 h-full flex flex-col">
+            <div className={`lg:col-span-2 h-full flex flex-col ${selectedMatchId ? 'flex' : 'hidden lg:flex'}`}>
                 {selectedMatchId ? (
                    <div className="bg-white rounded-xl shadow-sm border border-slate-200 h-full flex flex-col overflow-hidden">
+                      {/* Mobile Back Button */}
+                      <div className="lg:hidden p-2 bg-slate-100 border-b border-slate-200 flex items-center">
+                          <button onClick={() => setSelectedMatchId(null)} className="flex items-center text-slate-600 font-medium px-2 py-1">
+                              <ChevronLeft className="w-5 h-5 mr-1" /> Voltar à Lista
+                          </button>
+                      </div>
+
                       {/* Match Header */}
-                      <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50">
-                         <div className="flex gap-2 overflow-x-auto pb-1">
+                      <div className="p-4 border-b border-slate-100 flex flex-col sm:flex-row justify-between items-start sm:items-center bg-slate-50 gap-3">
+                         <div className="flex gap-2 overflow-x-auto pb-1 w-full sm:w-auto no-scrollbar">
                              <button 
                                 onClick={() => setActiveGameTab('LINEUP')}
-                                className={`px-3 py-1.5 rounded-lg text-sm font-medium transition whitespace-nowrap ${activeGameTab === 'LINEUP' ? 'bg-emerald-600 text-white' : 'text-slate-600 hover:bg-slate-200'}`}
+                                className={`px-3 py-1.5 rounded-lg text-sm font-medium transition whitespace-nowrap flex-shrink-0 ${activeGameTab === 'LINEUP' ? 'bg-emerald-600 text-white' : 'text-slate-600 hover:bg-slate-200'}`}
                              >
                                  Convocatória
                              </button>
                              <button 
                                 onClick={() => setActiveGameTab('TACTICS')}
-                                className={`px-3 py-1.5 rounded-lg text-sm font-medium transition whitespace-nowrap ${activeGameTab === 'TACTICS' ? 'bg-emerald-600 text-white' : 'text-slate-600 hover:bg-slate-200'}`}
+                                className={`px-3 py-1.5 rounded-lg text-sm font-medium transition whitespace-nowrap flex-shrink-0 ${activeGameTab === 'TACTICS' ? 'bg-emerald-600 text-white' : 'text-slate-600 hover:bg-slate-200'}`}
                              >
                                  Titulares
                              </button>
                              <button 
                                 onClick={() => setActiveGameTab('LIVE')}
-                                className={`px-3 py-1.5 rounded-lg text-sm font-medium transition whitespace-nowrap flex items-center ${activeGameTab === 'LIVE' ? 'bg-red-600 text-white animate-pulse' : 'text-slate-600 hover:bg-slate-200'}`}
+                                className={`px-3 py-1.5 rounded-lg text-sm font-medium transition whitespace-nowrap flex-shrink-0 flex items-center ${activeGameTab === 'LIVE' ? 'bg-red-600 text-white animate-pulse' : 'text-slate-600 hover:bg-slate-200'}`}
                              >
                                  <Play className="w-3 h-3 mr-1" /> Jogo
                              </button>
                          </div>
-                        <div className="flex space-x-2">
+                        <div className="flex space-x-2 w-full sm:w-auto justify-end border-t sm:border-t-0 pt-2 sm:pt-0 border-slate-200">
                            <button onClick={() => downloadMatchSheetPDF(selectedMatchId)} title="Ficha de Jogo" className="p-2 text-slate-500 hover:bg-slate-200 rounded"><Printer className="w-4 h-4"/></button>
                            <button onClick={() => copyConvocation(selectedMatchId)} title="Copiar Convocatória" className="p-2 text-slate-500 hover:bg-slate-200 rounded"><Copy className="w-4 h-4"/></button>
                            <button onClick={() => downloadConvocationPDF(selectedMatchId)} title="PDF Convocatória" className="p-2 text-emerald-600 hover:bg-emerald-100 rounded">
@@ -1160,10 +1353,17 @@ const App: React.FC = () => {
                           
                           {/* CONVOCATORIA TAB */}
                           {activeGameTab === 'LINEUP' && (
-                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                                {players
-                                   .filter(p => p.squadId === matches.find(m => m.id === selectedMatchId)?.squadId)
-                                   .map(player => {
+                              <div className="space-y-3">
+                                <div className="flex justify-between items-center bg-white p-3 rounded-lg border border-slate-200 shadow-sm">
+                                    <span className="font-bold text-slate-700">Convocados</span>
+                                    <span className="bg-emerald-100 text-emerald-800 px-3 py-1 rounded-full text-sm font-bold">
+                                        {matches.find(m => m.id === selectedMatchId)?.convokedIds?.length || 0}
+                                    </span>
+                                </div>
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                                    {players
+                                    .filter(p => p.squadId === matches.find(m => m.id === selectedMatchId)?.squadId)
+                                    .map(player => {
                                      const isSelected = matches.find(m => m.id === selectedMatchId)?.convokedIds?.includes(player.id);
                                      const isStarter = matches.find(m => m.id === selectedMatchId)?.gameData?.starters?.includes(player.id);
                                      
@@ -1209,6 +1409,7 @@ const App: React.FC = () => {
                                      )
                                    })}
                              </div>
+                          </div>
                           )}
 
                           {/* TACTICS / STARTERS TAB (VISUAL BOARD) */}
@@ -1318,19 +1519,23 @@ const App: React.FC = () => {
                                       {/* Top Section: Score & Timer */}
                                       <div className="p-3 pt-8 md:pt-4 flex flex-col items-center gap-3">
                                           {/* Timer Display */}
-                                          <div className="flex items-center gap-3 bg-black/30 px-4 py-1 rounded-full border border-white/10">
-                                              {matches.find(m => m.id === selectedMatchId)?.gameData?.isTimerRunning ? 
-                                                <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse shadow-[0_0_8px_rgba(239,68,68,0.6)]"/> : 
-                                                <span className="w-2 h-2 rounded-full bg-slate-500"/>
-                                              }
-                                              <span className="font-mono font-bold tracking-widest text-2xl md:text-3xl text-white tabular-nums">
-                                                  {formatTime(matches.find(m => m.id === selectedMatchId)?.gameData?.timer || 0)}
-                                              </span>
-                                               <button 
+                                          <div className="flex flex-col items-center gap-2 mb-2">
+                                              <div className="flex items-center gap-3 bg-black/40 px-6 py-2 rounded-2xl border border-white/10 backdrop-blur-sm">
+                                                  {matches.find(m => m.id === selectedMatchId)?.gameData?.isTimerRunning ? 
+                                                    <span className="w-3 h-3 rounded-full bg-red-500 animate-pulse shadow-[0_0_12px_rgba(239,68,68,0.8)]"/> : 
+                                                    <span className="w-3 h-3 rounded-full bg-slate-500"/>
+                                                  }
+                                                  <span className="font-mono font-bold tracking-widest text-4xl md:text-5xl text-white tabular-nums shadow-black drop-shadow-md">
+                                                      {formatTime(matches.find(m => m.id === selectedMatchId)?.gameData?.timer || 0)}
+                                                  </span>
+                                              </div>
+                                              
+                                              {/* Big Play/Pause Button */}
+                                              <button 
                                                 onClick={() => toggleTimer(selectedMatchId!)}
-                                                className={`ml-2 p-1 rounded-full flex items-center justify-center transition active:scale-95 ${matches.find(m => m.id === selectedMatchId)?.gameData?.isTimerRunning ? 'bg-yellow-500 text-slate-900' : 'bg-emerald-600 text-white'}`}
+                                                className={`mt-2 w-16 h-16 rounded-full flex items-center justify-center transition active:scale-95 shadow-lg border-4 border-slate-900 ${matches.find(m => m.id === selectedMatchId)?.gameData?.isTimerRunning ? 'bg-amber-500 text-slate-900 hover:bg-amber-400' : 'bg-emerald-500 text-white hover:bg-emerald-400'}`}
                                               >
-                                                  {matches.find(m => m.id === selectedMatchId)?.gameData?.isTimerRunning ? <Pause className="w-4 h-4 fill-current" /> : <Play className="w-4 h-4 fill-current ml-0.5" />}
+                                                  {matches.find(m => m.id === selectedMatchId)?.gameData?.isTimerRunning ? <Pause className="w-8 h-8 fill-current" /> : <Play className="w-8 h-8 fill-current ml-1" />}
                                               </button>
                                           </div>
 
@@ -1501,9 +1706,17 @@ const App: React.FC = () => {
                                                 .filter(p => !matches.find(m => m.id === selectedMatchId)?.gameData?.starters?.includes(p.id))
                                                 .map(p => (
                                                     <div key={p.id} className="flex justify-between bg-white border rounded-lg items-center p-3 shadow-sm">
-                                                        <span className="text-slate-800 font-medium text-base">
-                                                            <b className="mr-2 text-slate-500">#{p.jerseyNumber}</b> {p.name}
-                                                        </span>
+                                                        <div className="flex items-center">
+                                                            <span className="w-8 h-8 rounded-full bg-slate-100 text-slate-600 flex items-center justify-center font-bold mr-3 text-sm border border-slate-200">
+                                                                {p.jerseyNumber}
+                                                            </span>
+                                                            <div>
+                                                                <div className="font-medium text-slate-800">{p.name}</div>
+                                                                <div className="text-xs font-mono text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded inline-block mt-0.5">
+                                                                    {matches.find(m => m.id === selectedMatchId)?.gameData?.playerMinutes?.[p.id] || 0}' jogados
+                                                                </div>
+                                                            </div>
+                                                        </div>
                                                         
                                                         {/* Quick Sub IN Logic */}
                                                         <div className="relative">
@@ -1557,7 +1770,7 @@ const App: React.FC = () => {
         <div className="space-y-6">
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
             {/* List of Sessions */}
-            <div className="lg:col-span-1 space-y-4">
+            <div className={`lg:col-span-1 space-y-4 ${selectedSessionId ? 'hidden lg:block' : 'block'}`}>
               <div className="flex justify-between items-center">
                  <h2 className="text-lg font-bold text-slate-800">Sessões</h2>
                  <button 
@@ -1636,10 +1849,16 @@ const App: React.FC = () => {
             </div>
 
             {/* Attendance Sheet */}
-            <div className="lg:col-span-2">
+            <div className={`lg:col-span-2 ${selectedSessionId ? 'block' : 'hidden lg:block'}`}>
                {selectedSessionId ? (
                  <div className="bg-white rounded-xl shadow-sm border border-slate-200 h-full flex flex-col">
-                   <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50 rounded-t-xl">
+                   {/* Mobile Back Button */}
+                   <div className="lg:hidden p-2 bg-slate-100 border-b border-slate-200 flex items-center rounded-t-xl">
+                       <button onClick={() => setSelectedSessionId(null)} className="flex items-center text-slate-600 font-medium px-2 py-1">
+                           <ChevronLeft className="w-5 h-5 mr-1" /> Voltar à Lista
+                       </button>
+                   </div>
+                   <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50 lg:rounded-t-xl">
                       <div className="flex items-center">
                           <h3 className="font-bold text-slate-700 flex items-center mr-3">
                             <UserCircle className="w-5 h-5 mr-2 text-emerald-600" />
@@ -1705,6 +1924,63 @@ const App: React.FC = () => {
       {/* ADMIN VIEW - Protected by Role Check */}
       {currentView === 'ADMIN' && (currentUser?.role === UserRole.ADMIN || currentUser?.username === 'admin') && (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+           {/* Club Settings */}
+           <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200 md:col-span-2">
+              <h3 className="text-xl font-bold text-slate-800 mb-4 flex items-center">
+                <Settings className="w-5 h-5 mr-2" /> Definições do Clube
+              </h3>
+              <div className="flex flex-col sm:flex-row gap-4 sm:items-end">
+                  <div className="flex-1">
+                      <label className="block text-sm font-medium text-slate-700 mb-1">Logotipo do Clube</label>
+                      <div className="flex gap-2 mb-2">
+                          <input 
+                            type="text" 
+                            placeholder="URL da imagem..." 
+                            className={inputClass}
+                            value={clubLogoUrl}
+                            onChange={(e) => {
+                                const newUrl = e.target.value;
+                                setClubLogoUrl(newUrl);
+                                storageService.saveClubSettings({ logoUrl: newUrl });
+                            }}
+                          />
+                      </div>
+                      <div className="relative">
+                          <input 
+                              type="file" 
+                              accept="image/*"
+                              className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                              onChange={(e) => {
+                                  const file = e.target.files?.[0];
+                                  if (file) {
+                                      if (file.size > 500000) { // 500KB limit check
+                                          alert("A imagem é muito grande. Por favor use uma imagem com menos de 500KB.");
+                                          return;
+                                      }
+                                      const reader = new FileReader();
+                                      reader.onloadend = () => {
+                                          const base64String = reader.result as string;
+                                          setClubLogoUrl(base64String);
+                                          storageService.saveClubSettings({ logoUrl: base64String });
+                                      };
+                                      reader.readAsDataURL(file);
+                                  }
+                              }}
+                          />
+                          <button className="w-full py-2 bg-slate-100 text-slate-600 rounded border border-dashed border-slate-300 hover:bg-slate-200 flex items-center justify-center gap-2">
+                              <Upload className="w-4 h-4" /> Carregar Ficheiro (Max 500KB)
+                          </button>
+                      </div>
+                  </div>
+                  {clubLogoUrl && (
+                      <div className="w-16 h-16 border rounded flex items-center justify-center bg-slate-50">
+                          <img src={clubLogoUrl} alt="Logo Preview" className="max-w-full max-h-full object-contain" onError={(e) => (e.currentTarget.style.display = 'none')} />
+                      </div>
+                  )}
+              </div>
+              <p className="text-xs text-slate-500 mt-2">Este logotipo aparecerá no canto superior direito das convocatórias.</p>
+           </div>
+
            {/* Squad Management */}
            <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
               <h3 className="text-xl font-bold text-slate-800 mb-6 flex items-center">

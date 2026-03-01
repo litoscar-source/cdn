@@ -133,5 +133,15 @@ export const storageService = {
   
   persistLogin: (user: User) => {
       localStorage.setItem('coachpro_current_user', JSON.stringify(user));
+  },
+
+  // --- SETTINGS ---
+  getClubSettings: (): { logoUrl?: string } => {
+      const stored = localStorage.getItem('coachpro_club_settings');
+      return stored ? JSON.parse(stored) : {};
+  },
+
+  saveClubSettings: (settings: { logoUrl?: string }) => {
+      localStorage.setItem('coachpro_club_settings', JSON.stringify(settings));
   }
 };

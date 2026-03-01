@@ -1,13 +1,11 @@
-import React, { useState } from 'react';
+import React from 'react';
 import { User, ViewState, UserRole } from '../types';
-import { CLUB_NAME, CLUB_LOGO_URL } from '../constants';
+import { CLUB_NAME } from '../constants';
 import { 
   Users, 
   CalendarDays, 
   Settings, 
   LogOut, 
-  Menu, 
-  X,
   LayoutDashboard,
   UserCircle,
   Flag
@@ -22,7 +20,6 @@ interface LayoutProps {
 }
 
 const Layout: React.FC<LayoutProps> = ({ user, currentView, onNavigate, onLogout, children }) => {
-  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
   const NavItem = ({ view, icon: Icon, label }: { view: ViewState; icon: any; label: string }) => {
     // Hide Admin tab if not admin (Explicit username check added for fallback safety)
@@ -33,7 +30,6 @@ const Layout: React.FC<LayoutProps> = ({ user, currentView, onNavigate, onLogout
       <button
         onClick={() => {
           onNavigate(view);
-          setIsMobileMenuOpen(false);
         }}
         className={`flex items-center w-full px-4 py-3 text-sm font-medium transition-colors rounded-lg mb-1 ${
           isActive 
@@ -43,6 +39,24 @@ const Layout: React.FC<LayoutProps> = ({ user, currentView, onNavigate, onLogout
       >
         <Icon className={`w-5 h-5 mr-3 ${isActive ? 'text-white' : 'text-slate-400'}`} />
         {label}
+      </button>
+    );
+  };
+
+  const MobileNavItem = ({ view, icon: Icon, label }: { view: ViewState; icon: any; label: string }) => {
+    if (view === 'ADMIN' && user.role !== UserRole.ADMIN && user.username !== 'admin') return null;
+    const isActive = currentView === view;
+    return (
+      <button
+        onClick={() => onNavigate(view)}
+        className={`flex flex-col items-center justify-center min-w-[70px] py-2 px-1 rounded-lg transition-all active:scale-95 ${
+          isActive 
+            ? 'bg-emerald-600 text-white shadow-md' 
+            : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200'
+        }`}
+      >
+        <Icon className={`w-5 h-5 mb-1 ${isActive ? 'text-white' : 'text-slate-400'}`} />
+        <span className="text-[10px] font-medium leading-none">{label}</span>
       </button>
     );
   };
@@ -93,39 +107,34 @@ const Layout: React.FC<LayoutProps> = ({ user, currentView, onNavigate, onLogout
 
       {/* Main Content */}
       <div className="flex-1 flex flex-col h-full overflow-hidden">
-        {/* Mobile Header */}
-        <header className="md:hidden flex items-center justify-between p-4 bg-slate-900 text-white border-b border-slate-800 shadow-sm z-20">
-          <div className="flex items-center">
-            <div>
-               <h1 className="text-xs font-bold leading-tight">{CLUB_NAME}</h1>
+        {/* Mobile Header & Top Nav */}
+        <div className="md:hidden flex flex-col bg-slate-900 text-white shadow-md z-30 sticky top-0 shrink-0">
+            <div className="flex items-center justify-between px-4 py-3 border-b border-slate-800">
+                 <div className="flex items-center gap-2">
+                    <div className="w-8 h-8 bg-emerald-600 rounded-lg flex items-center justify-center font-bold text-white shadow-inner">
+                        {CLUB_NAME.substring(0, 2)}
+                    </div>
+                    <div>
+                        <h1 className="text-sm font-bold leading-tight">{CLUB_NAME}</h1>
+                        <p className="text-[10px] text-slate-400 leading-none">Gestor de Equipa</p>
+                    </div>
+                 </div>
+                 <button onClick={onLogout} className="p-2 text-slate-400 hover:text-red-400 transition">
+                    <LogOut className="w-5 h-5" />
+                 </button>
             </div>
-          </div>
-          <button onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)} className="p-2 text-slate-300 hover:bg-slate-800 rounded-lg">
-            {isMobileMenuOpen ? <X className="w-6 h-6" /> : <Menu className="w-6 h-6" />}
-          </button>
-        </header>
-
-        {/* Mobile Menu Overlay */}
-        {isMobileMenuOpen && (
-          <div className="md:hidden absolute inset-0 z-10 bg-slate-900 text-white pt-20 px-4 pb-4 flex flex-col space-y-2 overflow-y-auto">
-            <NavItem view="DASHBOARD" icon={LayoutDashboard} label="Visão Geral" />
-            <NavItem view="PLAYERS" icon={Users} label="Atletas" />
-            <NavItem view="TRAINING" icon={CalendarDays} label="Treinos" />
-            <NavItem view="MATCHES" icon={Flag} label="Jogos" />
-            {(user.role === UserRole.ADMIN || user.username === 'admin') && (
-                <NavItem view="ADMIN" icon={Settings} label="Definições" />
-            )}
-            <div className="border-t border-slate-800 my-4 pt-4">
-              <button 
-                onClick={onLogout}
-                className="flex items-center w-full px-4 py-3 text-sm font-medium text-red-400 bg-slate-800 rounded-lg"
-              >
-                <LogOut className="w-5 h-5 mr-3" />
-                Sair
-              </button>
-            </div>
-          </div>
-        )}
+            
+            {/* Horizontal Scrollable Nav */}
+            <nav className="flex overflow-x-auto no-scrollbar py-2 px-2 gap-1 bg-slate-800/50 backdrop-blur-sm border-b border-slate-800/50">
+                <MobileNavItem view="DASHBOARD" icon={LayoutDashboard} label="Geral" />
+                <MobileNavItem view="PLAYERS" icon={Users} label="Atletas" />
+                <MobileNavItem view="TRAINING" icon={CalendarDays} label="Treinos" />
+                <MobileNavItem view="MATCHES" icon={Flag} label="Jogos" />
+                {(user.role === UserRole.ADMIN || user.username === 'admin') && (
+                    <MobileNavItem view="ADMIN" icon={Settings} label="Admin" />
+                )}
+            </nav>
+        </div>
 
         {/* Page Content */}
         <main className="flex-1 overflow-auto p-4 md:p-8 bg-slate-100">

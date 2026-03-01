@@ -3,13 +3,43 @@ import autoTable from 'jspdf-autotable';
 import { Match, Squad, Player, TrainingSession, AttendanceRecord, AttendanceStatus } from '../types';
 import { CLUB_NAME } from '../constants';
 
-// Removed getDataUrl function as logo is no longer needed
+const getDataUrl = (url: string): Promise<string> => {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.crossOrigin = 'Anonymous';
+    img.src = url;
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      canvas.width = img.width;
+      canvas.height = img.height;
+      const ctx = canvas.getContext('2d');
+      if (ctx) {
+        ctx.drawImage(img, 0, 0);
+        resolve(canvas.toDataURL('image/png'));
+      } else {
+        reject(new Error('Canvas context is null'));
+      }
+    };
+    img.onerror = (error) => reject(error);
+  });
+};
 
-const addHeader = async (doc: jsPDF, title: string, subtitle: string) => {
+const addHeader = async (doc: jsPDF, title: string, subtitle: string, logoUrl?: string) => {
     const primaryColor = [16, 185, 129]; // Emerald 500
     const darkColor = [30, 41, 59]; // Slate 800
 
-    // No Logo logic here anymore as requested
+    // -- Logo --
+    if (logoUrl) {
+        try {
+            const base64Logo = await getDataUrl(logoUrl);
+            const imgProps = doc.getImageProperties(base64Logo);
+            const width = 25;
+            const height = (imgProps.height * width) / imgProps.width;
+            doc.addImage(base64Logo, 'PNG', 170, 10, width, height);
+        } catch (e) {
+            console.warn("Could not add logo to PDF:", e);
+        }
+    }
     
     // -- Header --
     doc.setFontSize(22);
@@ -39,10 +69,11 @@ const addFooter = (doc: jsPDF) => {
 export const generateConvocationPDF = async (
   match: Match, 
   squad: Squad, 
-  players: Player[]
+  players: Player[],
+  logoUrl?: string
 ) => {
   const doc = new jsPDF();
-  const startY = await addHeader(doc, `CONVOCATÓRIA - ${squad.name}`, "Gestão de Equipas");
+  const startY = await addHeader(doc, `CONVOCATÓRIA - ${squad.name}`, "Gestão de Equipas", logoUrl);
 
   // -- Match Details --
   doc.setFontSize(11);
