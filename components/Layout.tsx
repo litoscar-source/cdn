@@ -8,7 +8,8 @@ import {
   LogOut, 
   LayoutDashboard,
   UserCircle,
-  Flag
+  Flag,
+  UserCheck
 } from 'lucide-react';
 
 interface LayoutProps {
@@ -75,7 +76,8 @@ const Layout: React.FC<LayoutProps> = ({ user, currentView, onNavigate, onLogout
             <NavItem view="DASHBOARD" icon={LayoutDashboard} label="Visão Geral" />
             <NavItem view="PLAYERS" icon={Users} label="Atletas" />
             <NavItem view="TRAINING" icon={CalendarDays} label="Treinos" />
-            <NavItem view="MATCHES" icon={Flag} label="Jogos & Convocatórias" />
+            <NavItem view="CONVOCATION" icon={UserCheck} label="Convocatórias" />
+            <NavItem view="MATCHES" icon={Flag} label="Jogos" />
             
             {(user.role === UserRole.ADMIN || user.username === 'admin') && (
                <>
@@ -129,6 +131,7 @@ const Layout: React.FC<LayoutProps> = ({ user, currentView, onNavigate, onLogout
                 <MobileNavItem view="DASHBOARD" icon={LayoutDashboard} label="Geral" />
                 <MobileNavItem view="PLAYERS" icon={Users} label="Atletas" />
                 <MobileNavItem view="TRAINING" icon={CalendarDays} label="Treinos" />
+                <MobileNavItem view="CONVOCATION" icon={UserCheck} label="Convocatórias" />
                 <MobileNavItem view="MATCHES" icon={Flag} label="Jogos" />
                 {(user.role === UserRole.ADMIN || user.username === 'admin') && (
                     <MobileNavItem view="ADMIN" icon={Settings} label="Admin" />

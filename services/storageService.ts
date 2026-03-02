@@ -136,12 +136,18 @@ export const storageService = {
   },
 
   // --- SETTINGS ---
-  getClubSettings: (): { logoUrl?: string } => {
-      const stored = localStorage.getItem('coachpro_club_settings');
-      return stored ? JSON.parse(stored) : {};
+  getClubSettings: async (): Promise<{ logoUrl?: string }> => {
+      const { data, error } = await supabase.from('settings').select('value').eq('key', 'club_settings').single();
+      if (error) { 
+          // If not found, return empty, don't log error as it might be first run
+          if (error.code !== 'PGRST116') console.error('Error fetching settings:', error);
+          return {}; 
+      }
+      return data?.value || {};
   },
 
-  saveClubSettings: (settings: { logoUrl?: string }) => {
-      localStorage.setItem('coachpro_club_settings', JSON.stringify(settings));
+  saveClubSettings: async (settings: { logoUrl?: string }) => {
+      const { error } = await supabase.from('settings').upsert({ key: 'club_settings', value: settings });
+      if (error) console.error('Error saving settings:', error);
   }
 };
