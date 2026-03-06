@@ -1167,6 +1167,7 @@ const App: React.FC = () => {
               onSave={savePlayer} 
               onCancel={() => setEditingPlayer(undefined)}
               matches={matches}
+              attendance={attendance}
             />
           ) : (
             <div className="space-y-6">

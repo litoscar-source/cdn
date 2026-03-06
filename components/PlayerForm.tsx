@@ -1,16 +1,17 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { Player, Squad, Match } from '../types';
+import { Player, Squad, Match, AttendanceRecord, AttendanceStatus } from '../types';
 import { Save, X, Activity, User as UserIcon, BarChart3, Camera, Upload } from 'lucide-react';
 
 interface PlayerFormProps {
   player?: Player | null; // null means new player
   squads: Squad[];
   matches?: Match[]; // Optional for new players
+  attendance?: AttendanceRecord[]; // Optional for new players
   onSave: (player: Player) => void;
   onCancel: () => void;
 }
 
-const PlayerForm: React.FC<PlayerFormProps> = ({ player, squads, matches = [], onSave, onCancel }) => {
+const PlayerForm: React.FC<PlayerFormProps> = ({ player, squads, matches = [], attendance = [], onSave, onCancel }) => {
   const [activeTab, setActiveTab] = useState<'INFO' | 'SPORTS' | 'STATS'>('INFO');
   const fileInputRef = useRef<HTMLInputElement>(null);
   
@@ -81,15 +82,35 @@ const PlayerForm: React.FC<PlayerFormProps> = ({ player, squads, matches = [], o
         if (h.minutes > 0) totalMatches++;
     });
 
+    // Attendance Stats
+    let totalTrainings = 0;
+    let totalPresent = 0;
+    let totalAbsent = 0;
+    let totalLate = 0;
+
+    const playerAttendance = attendance.filter(a => a.playerId === player.id);
+    playerAttendance.forEach(a => {
+        totalTrainings++;
+        if (a.status === AttendanceStatus.PRESENT) totalPresent++;
+        if (a.status === AttendanceStatus.ABSENT) totalAbsent++;
+        if (a.status === AttendanceStatus.LATE) totalLate++;
+    });
+
     return {
         totalMatches,
         totalConvocations,
         totalStarts,
         totalBenchStarts,
         totalMinutes,
-        history: matchHistory
+        history: matchHistory,
+        attendance: {
+            total: totalTrainings,
+            present: totalPresent,
+            absent: totalAbsent,
+            late: totalLate
+        }
     };
-  }, [player, matches]);
+  }, [player, matches, attendance]);
 
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -367,6 +388,25 @@ const PlayerForm: React.FC<PlayerFormProps> = ({ player, squads, matches = [], o
                      <div className="bg-slate-50 p-4 rounded-lg border border-slate-100 text-center">
                         <div className="text-3xl font-bold text-slate-700">{playerStats.totalBenchStarts}</div>
                         <div className="text-xs text-slate-500 uppercase font-semibold mt-1">Começou no Banco</div>
+                    </div>
+                </div>
+
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                    <div className="bg-slate-50 p-4 rounded-lg border border-slate-100 text-center">
+                        <div className="text-3xl font-bold text-slate-700">{playerStats.attendance.total}</div>
+                        <div className="text-xs text-slate-500 uppercase font-semibold mt-1">Treinos Realizados</div>
+                    </div>
+                    <div className="bg-slate-50 p-4 rounded-lg border border-slate-100 text-center">
+                        <div className="text-3xl font-bold text-emerald-600">{playerStats.attendance.present}</div>
+                        <div className="text-xs text-slate-500 uppercase font-semibold mt-1">Presenças</div>
+                    </div>
+                    <div className="bg-slate-50 p-4 rounded-lg border border-slate-100 text-center">
+                        <div className="text-3xl font-bold text-red-600">{playerStats.attendance.absent}</div>
+                        <div className="text-xs text-slate-500 uppercase font-semibold mt-1">Faltas</div>
+                    </div>
+                     <div className="bg-slate-50 p-4 rounded-lg border border-slate-100 text-center">
+                        <div className="text-3xl font-bold text-amber-500">{playerStats.attendance.late}</div>
+                        <div className="text-xs text-slate-500 uppercase font-semibold mt-1">Atrasos</div>
                     </div>
                 </div>
 
