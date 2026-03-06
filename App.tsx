@@ -188,95 +188,121 @@ const App: React.FC = () => {
   }, [isTimerRunning, selectedMatchId]);
 
   const toggleFullscreen = () => {
-    if (!document.fullscreenElement) {
-        document.documentElement.requestFullscreen().catch((e) => {
-            console.error(`Error attempting to enable fullscreen mode: ${e.message} (${e.name})`);
-        });
+    if (!isLiveGameFullscreen) {
+        if (document.documentElement.requestFullscreen) {
+            document.documentElement.requestFullscreen().catch((e) => {
+                console.warn(`Error attempting to enable fullscreen mode: ${e.message} (${e.name})`);
+            });
+        }
         setIsLiveGameFullscreen(true);
     } else {
-        if (document.exitFullscreen) {
-            document.exitFullscreen();
-            setIsLiveGameFullscreen(false);
+        if (document.exitFullscreen && document.fullscreenElement) {
+            document.exitFullscreen().catch(() => {});
         }
+        setIsLiveGameFullscreen(false);
     }
   };
 
   // Initial Load & Admin Check
   useEffect(() => {
     const init = async () => {
-        setIsLoading(true);
-        
-        // Load Settings immediately (for Login Logo)
-        const settings = await storageService.getClubSettings();
-        if (settings.logoUrl) setClubLogoUrl(settings.logoUrl);
+        try {
+            setIsLoading(true);
+            
+            // Load Settings immediately (for Login Logo)
+            const settings = await storageService.getClubSettings();
+            if (settings.logoUrl) setClubLogoUrl(settings.logoUrl);
 
-        // We need to fetch users to display the login dropdown
-        let loadedUsers = await storageService.getUsers();
-        
-        // --- SEED DEFAULT ADMIN IF NO USERS EXIST ---
-        if (loadedUsers.length === 0) {
-            const defaultAdmin: User = {
-                id: crypto.randomUUID(),
-                name: 'Administrador',
+            // We need to fetch users to display the login dropdown
+            let loadedUsers = await storageService.getUsers();
+            
+            // --- SEED DEFAULT ADMIN IF NO USERS EXIST ---
+            if (loadedUsers.length === 0) {
+                const generateId = () => {
+                    return typeof crypto !== 'undefined' && crypto.randomUUID 
+                        ? crypto.randomUUID() 
+                        : Math.random().toString(36).substring(2, 15);
+                };
+                
+                const defaultAdmin: User = {
+                    id: generateId(),
+                    name: 'Administrador',
+                    username: 'admin',
+                    role: UserRole.ADMIN,
+                    password: '1212',
+                    allowedSquads: []
+                };
+                await storageService.saveUsers([defaultAdmin]);
+                loadedUsers = [defaultAdmin];
+            } else {
+                // Ensure Admin has correct password (migration for dev)
+                const adminUser = loadedUsers.find(u => u.username === 'admin');
+                if (adminUser && adminUser.password !== '1212') {
+                    adminUser.password = '1212';
+                    await storageService.saveUsers([adminUser]);
+                    // Update local state
+                    loadedUsers = loadedUsers.map(u => u.id === adminUser.id ? adminUser : u);
+                }
+            }
+
+            setUsers(loadedUsers);
+            
+            const user = storageService.getCurrentUser();
+            if (user) {
+              // Verify if user still exists in DB (security check)
+              const validUser = loadedUsers.find(u => u.id === user.id);
+              if (validUser) {
+                  setCurrentUser(validUser); // Update with fresh data (e.g. if role changed)
+                  setIsLoginView(false);
+                  await loadData();
+              } else {
+                  storageService.logout();
+                  setIsLoginView(true);
+              }
+            }
+        } catch (error) {
+            console.error("Initialization error:", error);
+            // Fallback to ensure UI doesn't hang
+            setUsers([{
+                id: 'fallback-admin',
+                name: 'Administrador (Offline)',
                 username: 'admin',
                 role: UserRole.ADMIN,
                 password: '1212',
                 allowedSquads: []
-            };
-            await storageService.saveUsers([defaultAdmin]);
-            loadedUsers = [defaultAdmin];
-        } else {
-            // Ensure Admin has correct password (migration for dev)
-            const adminUser = loadedUsers.find(u => u.username === 'admin');
-            if (adminUser && adminUser.password !== '1212') {
-                adminUser.password = '1212';
-                await storageService.saveUsers([adminUser]);
-                // Update local state
-                loadedUsers = loadedUsers.map(u => u.id === adminUser.id ? adminUser : u);
-            }
+            }]);
+        } finally {
+            setIsLoading(false);
         }
-
-        setUsers(loadedUsers);
-        
-        const user = storageService.getCurrentUser();
-        if (user) {
-          // Verify if user still exists in DB (security check)
-          const validUser = loadedUsers.find(u => u.id === user.id);
-          if (validUser) {
-              setCurrentUser(validUser); // Update with fresh data (e.g. if role changed)
-              setIsLoginView(false);
-              await loadData();
-          } else {
-              storageService.logout();
-              setIsLoginView(true);
-          }
-        }
-        setIsLoading(false);
     };
     init();
   }, []);
 
   const loadData = async () => {
-    // Parallel fetching for performance
-    const [u, s, p, sess, att, m] = await Promise.all([
-        storageService.getUsers(),
-        storageService.getSquads(),
-        storageService.getPlayers(),
-        storageService.getSessions(),
-        storageService.getAttendance(),
-        storageService.getMatches()
-    ]);
-    
-    setUsers(u);
-    setSquads(s);
-    setPlayers(p);
-    setSessions(sess);
-    setAttendance(att);
-    setMatches(m);
+    try {
+        // Parallel fetching for performance
+        const [u, s, p, sess, att, m] = await Promise.all([
+            storageService.getUsers().catch(() => []),
+            storageService.getSquads().catch(() => []),
+            storageService.getPlayers().catch(() => []),
+            storageService.getSessions().catch(() => []),
+            storageService.getAttendance().catch(() => []),
+            storageService.getMatches().catch(() => [])
+        ]);
+        
+        if (u.length > 0) setUsers(u);
+        setSquads(s);
+        setPlayers(p);
+        setSessions(sess);
+        setAttendance(att);
+        setMatches(m);
 
-    // Load Settings
-    const settings = await storageService.getClubSettings();
-    if (settings.logoUrl) setClubLogoUrl(settings.logoUrl);
+        // Load Settings
+        const settings = await storageService.getClubSettings().catch(() => ({}));
+        if (settings.logoUrl) setClubLogoUrl(settings.logoUrl);
+    } catch (e) {
+        console.error("Error loading data:", e);
+    }
   };
 
   const handleLogin = async (e: React.FormEvent) => {
@@ -284,24 +310,35 @@ const App: React.FC = () => {
     setLoginError('');
     if(!selectedLoginUserId) return;
     
-    // Always re-fetch users on login attempt to ensure we have latest passwords
-    const latestUsers = await storageService.getUsers();
-    setUsers(latestUsers);
-    
-    const user = latestUsers.find(u => u.id === selectedLoginUserId);
-    if (user) {
-        // Strict Password Check
-        if (user.password !== loginPassword) {
-            setLoginError('Password incorreta.');
-            return;
-        }
+    setIsLoading(true);
+    try {
+        // Always re-fetch users on login attempt to ensure we have latest passwords
+        const latestUsers = await storageService.getUsers();
+        
+        // If fetch fails (e.g. offline), fallback to the currently loaded users
+        const activeUsers = latestUsers.length > 0 ? latestUsers : users;
+        setUsers(activeUsers);
+        
+        const user = activeUsers.find(u => u.id === selectedLoginUserId);
+        if (user) {
+            // Strict Password Check
+            if (user.password !== loginPassword) {
+                setLoginError('Password incorreta.');
+                return;
+            }
 
-        storageService.persistLogin(user);
-        setCurrentUser(user);
-        setIsLoading(true);
-        await loadData();
+            storageService.persistLogin(user);
+            setCurrentUser(user);
+            await loadData();
+            setIsLoginView(false);
+        } else {
+            setLoginError('Utilizador não encontrado.');
+        }
+    } catch (error) {
+        console.error("Login error:", error);
+        setLoginError('Erro ao tentar iniciar sessão.');
+    } finally {
         setIsLoading(false);
-        setIsLoginView(false);
     }
   };
 
@@ -996,18 +1033,19 @@ const App: React.FC = () => {
           </div>
 
           <form onSubmit={handlePinSubmit} className="w-full space-y-6">
-            <div>
+            <div className="relative">
               <label className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-2 text-center">Quem és tu?</label>
               <select 
-                className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-center font-bold text-slate-800 focus:ring-2 focus:ring-emerald-500 outline-none appearance-none"
+                className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-center font-bold text-slate-800 focus:ring-2 focus:ring-emerald-500 outline-none cursor-pointer disabled:opacity-50"
                 value={selectedLoginUserId}
+                disabled={isLoading}
                 onChange={(e) => {
                     setSelectedLoginUserId(e.target.value);
                     setLoginError('');
                     setLoginPassword('');
                 }}
               >
-                <option value="">Selecionar Treinador...</option>
+                <option value="">{isLoading ? 'A carregar...' : 'Selecionar Treinador...'}</option>
                 {users.map(u => (
                     <option key={u.id} value={u.id}>{u.name}</option>
                 ))}
@@ -1406,6 +1444,20 @@ const App: React.FC = () => {
                      <div className="grid grid-cols-2 gap-2">
                         <input type="date" className={inputClass} value={editingMatch.date} onChange={e => setEditingMatch({...editingMatch, date: e.target.value})} />
                         <input type="time" className={inputClass} value={editingMatch.time} onChange={e => setEditingMatch({...editingMatch, time: e.target.value})} />
+                     </div>
+                     <div className="grid grid-cols-2 gap-2">
+                        <div>
+                            <label className="text-xs text-slate-500 font-bold ml-1">Hora Concentração</label>
+                            <input type="time" className={inputClass} value={editingMatch.meetingTime || ''} onChange={e => setEditingMatch({...editingMatch, meetingTime: e.target.value})} />
+                        </div>
+                        <div>
+                            <label className="text-xs text-slate-500 font-bold ml-1">Tipo de Jogo</label>
+                            <select className={inputClass} value={editingMatch.matchType || 'Oficial'} onChange={e => setEditingMatch({...editingMatch, matchType: e.target.value as any})}>
+                                <option value="Oficial">Oficial</option>
+                                <option value="Treino">Treino</option>
+                                <option value="Torneio">Torneio</option>
+                            </select>
+                        </div>
                      </div>
                      <input placeholder="Adversário" className={inputClass} value={editingMatch.opponent} onChange={e => setEditingMatch({...editingMatch, opponent: e.target.value})} />
                      <div className="grid grid-cols-2 gap-2">

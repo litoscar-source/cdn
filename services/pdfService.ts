@@ -24,8 +24,8 @@ const getDataUrl = (url: string): Promise<string> => {
   });
 };
 
-const addHeader = async (doc: jsPDF, title: string, subtitle: string, logoUrl?: string) => {
-    const primaryColor = [16, 185, 129]; // Emerald 500
+const addHeader = async (doc: jsPDF, title: string, subtitle: string, logoUrl?: string, customColor?: number[], isConvocation?: boolean) => {
+    const primaryColor = customColor || [16, 185, 129]; // Default Emerald 500
     const darkColor = [30, 41, 59]; // Slate 800
 
     // -- Logo --
@@ -33,9 +33,34 @@ const addHeader = async (doc: jsPDF, title: string, subtitle: string, logoUrl?: 
         try {
             const base64Logo = await getDataUrl(logoUrl);
             const imgProps = doc.getImageProperties(base64Logo);
-            const width = 25;
+            
+            // Add Watermark if it's a convocation
+            if (isConvocation) {
+                const pageWidth = doc.internal.pageSize.width;
+                const pageHeight = doc.internal.pageSize.height;
+                const watermarkWidth = pageWidth * 0.6; // 60% of page width
+                const watermarkHeight = (imgProps.height * watermarkWidth) / imgProps.width;
+                
+                // Save current graphics state
+                doc.saveGraphicsState();
+                
+                // Set transparency for watermark (0.1 = 10% opacity)
+                doc.setGState(new (doc as any).GState({opacity: 0.1}));
+                
+                // Center the watermark
+                const xPos = (pageWidth - watermarkWidth) / 2;
+                const yPos = (pageHeight - watermarkHeight) / 2;
+                
+                doc.addImage(base64Logo, 'PNG', xPos, yPos, watermarkWidth, watermarkHeight);
+                
+                // Restore graphics state
+                doc.restoreGraphicsState();
+            }
+
+            // Add Header Logo
+            const width = isConvocation ? 45 : 25; // Even larger logo for convocation (was 35)
             const height = (imgProps.height * width) / imgProps.width;
-            doc.addImage(base64Logo, 'PNG', 170, 10, width, height);
+            doc.addImage(base64Logo, 'PNG', 160, 10, width, height); // Adjusted X position to fit larger logo
         } catch (e) {
             console.warn("Could not add logo to PDF:", e);
         }
@@ -73,7 +98,8 @@ export const generateConvocationPDF = async (
   logoUrl?: string
 ) => {
   const doc = new jsPDF();
-  const startY = await addHeader(doc, `CONVOCATÓRIA - ${squad.name}`, "Gestão de Equipas", logoUrl);
+  const darkBlueColor = [30, 58, 138]; // blue-900
+  const startY = await addHeader(doc, `CONVOCATÓRIA - ${squad.name}`, "Gestão de Equipas", logoUrl, darkBlueColor, true);
 
   // -- Match Details --
   doc.setFontSize(11);
@@ -85,10 +111,24 @@ export const generateConvocationPDF = async (
   doc.setFont("helvetica", "normal");
   doc.text(match.opponent, 40, detailsY);
 
+  if (match.matchType) {
+      doc.setFont("helvetica", "bold");
+      doc.text("Tipo de Jogo:", 130, detailsY);
+      doc.setFont("helvetica", "normal");
+      doc.text(match.matchType, 160, detailsY);
+  }
+
   doc.setFont("helvetica", "bold");
   doc.text("Data/Hora:", 14, detailsY + 6);
   doc.setFont("helvetica", "normal");
   doc.text(`${match.date} às ${match.time}`, 40, detailsY + 6);
+
+  if (match.meetingTime) {
+      doc.setFont("helvetica", "bold");
+      doc.text("Hora Concentração:", 130, detailsY + 6);
+      doc.setFont("helvetica", "normal");
+      doc.text(match.meetingTime, 170, detailsY + 6);
+  }
 
   doc.setFont("helvetica", "bold");
   doc.text("Local:", 14, detailsY + 12);
@@ -110,23 +150,23 @@ export const generateConvocationPDF = async (
 
   // -- Players Table --
   const sortedPlayers = [...players].sort((a, b) => Number(a.jerseyNumber) - Number(b.jerseyNumber));
-  const tableData = sortedPlayers.map(p => [p.jerseyNumber, p.name, p.jerseyName || '-']);
+  const tableData = sortedPlayers.map(p => [p.jerseyNumber, p.name]);
 
   autoTable(doc, {
     startY: detailsY + 20,
-    head: [['#', 'Nome Completo', 'Nome Camisola']],
+    head: [['#', 'Nome Completo']],
     body: tableData,
     theme: 'grid',
-    headStyles: { fillColor: [16, 185, 129], textColor: 255, fontStyle: 'bold' },
+    headStyles: { fillColor: darkBlueColor, textColor: 255, fontStyle: 'bold' },
     styles: { fontSize: 10, cellPadding: 3 },
-    alternateRowStyles: { fillColor: [240, 253, 244] }
+    alternateRowStyles: { fillColor: [240, 249, 255] } // sky-50
   });
   
   // -- Notes --
   if (match.notes) {
     const finalY = (doc as any).lastAutoTable.finalY + 10;
     doc.setFontSize(10);
-    doc.setTextColor(16, 185, 129);
+    doc.setTextColor(darkBlueColor[0], darkBlueColor[1], darkBlueColor[2]);
     doc.setFont("helvetica", "bold");
     doc.text("OBSERVAÇÕES:", 14, finalY);
     

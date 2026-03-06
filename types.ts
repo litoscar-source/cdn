@@ -131,6 +131,8 @@ export interface Match {
   squadId: string;
   date: string;
   time: string;
+  meetingTime?: string; // Hora de concentração
+  matchType?: 'Oficial' | 'Treino' | 'Torneio'; // Tipo de jogo
   opponent: string;
   location: 'Casa' | 'Fora';
   venue?: string; // Specific field name (especially for Away games)

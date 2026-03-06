@@ -7,7 +7,10 @@ export const storageService = {
   // --- USERS ---
   getUsers: async (): Promise<User[]> => {
     const { data, error } = await supabase.from('users').select('*');
-    if (error) { console.error('Error fetching users:', error); return []; }
+    if (error) { 
+        console.error('Error fetching users:', error); 
+        throw new Error(`Failed to fetch users: ${error.message}`);
+    }
     return data || [];
   },
   
